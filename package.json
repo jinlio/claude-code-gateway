@@ -34,9 +34,14 @@
     "node": ">=18.0.0"
   },
   "openclaw": {
-    "extensions": ["./src/plugin/index.js"],
+    "extensions": ["./src/plugin/entry.mjs"],
+    "runtimeExtensions": ["./src/plugin/entry.mjs"],
     "compat": {
-      "pluginApi": ">=2026.3.24-beta.2"
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.5.4"
     }
   }
 }

@@ -1,4 +1,4 @@
-// Tests for plugin/index.js — init, command registration, formatToolInput
+// Tests for plugin/index.js — register(api), command registration, formatToolInput
 
 const path = require('path');
 const fs = require('fs');
@@ -13,7 +13,7 @@ jest.mock('../../src/core/hook-inbox');
 jest.mock('../../src/core/persistent-session-manager');
 jest.mock('../../src/core/context-manager');
 
-const { init, formatToolInput } = require('../../src/plugin/index');
+const { register, formatToolInput } = require('../../src/plugin/index');
 const { ClaudeBridge } = require('../../src/core/claude-bridge');
 const { ApprovalServer } = require('../../src/core/approval-server');
 const { ApprovalRules } = require('../../src/core/approval-rules');
@@ -57,13 +57,12 @@ describe('formatToolInput', () => {
   });
 });
 
-describe('init', () => {
+describe('register(api)', () => {
   it('initializes all modules and registers commands', () => {
     const mockApi = { registerCommand: jest.fn(), on: jest.fn() };
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bridge-plugin-'));
     const config = { dataDir: tmpDir };
 
-    // Mock ApprovalServer.start to resolve immediately
     ApprovalServer.mockImplementation(() => ({
       start: jest.fn().mockResolvedValue(7890),
       getPort: jest.fn().mockReturnValue(7890),
@@ -72,16 +71,13 @@ describe('init', () => {
       onApprovalNeeded: null
     }));
 
-    init(mockApi, config);
+    register({ ...mockApi, pluginConfig: config });
 
-    // Should register 10 commands (including /cc)
     expect(mockApi.registerCommand).toHaveBeenCalledTimes(10);
 
-    // Should register lifecycle hooks
     expect(mockApi.on).toHaveBeenCalledWith('gateway_start', expect.any(Function));
     expect(mockApi.on).toHaveBeenCalledWith('gateway_stop', expect.any(Function));
 
-    // Check command names
     const commandNames = mockApi.registerCommand.mock.calls.map(c => c[0].name);
     expect(commandNames).toContain('cc');
     expect(commandNames).toContain('cc_start');
@@ -97,7 +93,7 @@ describe('init', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('reads config from api.pluginConfig when config not provided directly', () => {
+  it('reads config from api.pluginConfig', () => {
     const mockApi = { registerCommand: jest.fn(), on: jest.fn(), pluginConfig: { defaultMode: 'strict' } };
 
     ApprovalServer.mockImplementation(() => ({
@@ -108,13 +104,13 @@ describe('init', () => {
       onApprovalNeeded: null
     }));
 
-    init(mockApi);
+    register(mockApi);
 
     expect(mockApi.registerCommand).toHaveBeenCalledTimes(10);
   });
 });
 
-describe('command handlers', () => {
+describe('command execute handlers', () => {
   let mockApi;
   let commands;
   let tmpDir;
@@ -123,7 +119,7 @@ describe('command handlers', () => {
     mockApi = {
       registerCommand: jest.fn(),
       on: jest.fn(),
-      config: {},
+      pluginConfig: { dataDir: '/tmp/cc-bridge-test' },
       runtime: {
         channel: {
           outbound: {
@@ -136,7 +132,6 @@ describe('command handlers', () => {
     };
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bridge-plugin-'));
 
-    // Setup mocks
     const mockBridge = {
       findActiveSession: jest.fn(),
       sessionMeta: new Map(),
@@ -179,10 +174,10 @@ describe('command handlers', () => {
       buildContextPrompt: jest.fn().mockReturnValue('test context')
     }));
 
-    init(mockApi, config);
+    register(mockApi);
     commands = {};
     for (const call of mockApi.registerCommand.mock.calls) {
-      commands[call[0].name] = call[0].handler;
+      commands[call[0].name] = call[0].execute;
     }
   });
 
@@ -190,13 +185,11 @@ describe('command handlers', () => {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   });
 
-  const config = { dataDir: '/tmp/cc-bridge-test' };
-
   describe('cc_mode', () => {
     it('shows current mode when no valid arg given', async () => {
-      const result = await commands.cc_mode({ senderId: 'u1', args: '' });
-      expect(result.text).toContain('当前模式');
-      expect(result.text).toContain('efficient');
+      const result = await commands.cc_mode({ userId: 'u1', input: '' });
+      expect(result.output).toContain('当前模式');
+      expect(result.output).toContain('efficient');
     });
 
     it('switches to efficient mode and syncs with server', async () => {
@@ -205,11 +198,11 @@ describe('command handlers', () => {
       bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', active: true });
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const modeHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_mode')[0].handler;
+      register(mockApi);
+      const modeExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_mode')[0].execute;
 
-      const result = await modeHandler({ senderId: 'u1', args: 'efficient' });
-      expect(result.text).toContain('efficient');
+      const result = await modeExecute({ userId: 'u1', input: 'efficient' });
+      expect(result.output).toContain('efficient');
     });
 
     it('switches to strict mode and syncs with server', async () => {
@@ -218,11 +211,11 @@ describe('command handlers', () => {
       bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', active: true });
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const modeHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_mode')[0].handler;
+      register(mockApi);
+      const modeExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_mode')[0].execute;
 
-      const result = await modeHandler({ senderId: 'u1', args: 'strict' });
-      expect(result.text).toContain('strict');
+      const result = await modeExecute({ userId: 'u1', input: 'strict' });
+      expect(result.output).toContain('strict');
     });
   });
 
@@ -233,11 +226,11 @@ describe('command handlers', () => {
       bridgeInstance.sessionMeta.set('existing', { cwd: '/ws', startedAt: new Date().toISOString(), lastActiveAt: new Date().toISOString(), messageCount: 3 });
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const startHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_start')[0].handler;
+      register(mockApi);
+      const startExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_start')[0].execute;
 
-      const result = await startHandler({ senderId: 'u1', workspace: '/ws' });
-      expect(result.text).toContain('持久会话状态');
+      const result = await startExecute({ userId: 'u1', workspace: '/ws' });
+      expect(result.output).toContain('持久会话状态');
     });
   });
 
@@ -247,11 +240,11 @@ describe('command handlers', () => {
       bridgeInstance.findActiveSession.mockReturnValue(null);
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const stopHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_stop')[0].handler;
+      register(mockApi);
+      const stopExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_stop')[0].execute;
 
-      const result = await stopHandler({ senderId: 'u1' });
-      expect(result.text).toContain('没有持久会话');
+      const result = await stopExecute({ userId: 'u1' });
+      expect(result.output).toContain('没有持久会话');
     });
   });
 
@@ -261,11 +254,11 @@ describe('command handlers', () => {
       bridgeInstance.findActiveSession.mockReturnValue(null);
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const statusHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_status')[0].handler;
+      register(mockApi);
+      const statusExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_status')[0].execute;
 
-      const result = await statusHandler({ senderId: 'u1' });
-      expect(result.text).toContain('没有活跃');
+      const result = await statusExecute({ userId: 'u1' });
+      expect(result.output).toContain('没有活跃');
     });
   });
 
@@ -275,33 +268,33 @@ describe('command handlers', () => {
       bridgeInstance.findActiveSession.mockReturnValue(null);
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const answerHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_answer')[0].handler;
+      register(mockApi);
+      const answerExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_answer')[0].execute;
 
-      const result = await answerHandler({ senderId: 'u1', args: '' });
-      expect(result.text).toContain('用法');
+      const result = await answerExecute({ userId: 'u1', input: '' });
+      expect(result.output).toContain('用法');
     });
   });
 
   describe('cc_approve', () => {
     it('returns usage when no shortId provided', async () => {
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const approveHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_approve')[0].handler;
+      register(mockApi);
+      const approveExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_approve')[0].execute;
 
-      const result = await approveHandler({ args: '' });
-      expect(result.text).toContain('用法');
+      const result = await approveExecute({ input: '' });
+      expect(result.output).toContain('用法');
     });
   });
 
   describe('cc_deny', () => {
     it('returns usage when no shortId provided', async () => {
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const denyHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_deny')[0].handler;
+      register(mockApi);
+      const denyExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_deny')[0].execute;
 
-      const result = await denyHandler({ args: '' });
-      expect(result.text).toContain('用法');
+      const result = await denyExecute({ input: '' });
+      expect(result.output).toContain('用法');
     });
   });
 
@@ -311,11 +304,11 @@ describe('command handlers', () => {
       bridgeInstance.findActiveSession.mockReturnValue(null);
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const revertHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].handler;
+      register(mockApi);
+      const revertExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].execute;
 
-      const result = await revertHandler({ senderId: 'u1', args: '' });
-      expect(result.text).toContain('没有活跃');
+      const result = await revertExecute({ userId: 'u1', input: '' });
+      expect(result.output).toContain('没有活跃');
     });
 
     it('shows confirmation prompt when no --confirm/--cancel', async () => {
@@ -324,11 +317,11 @@ describe('command handlers', () => {
       bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', cwd: '/ws', active: true, stashRef: 'CC-snapshot-s1-123456' });
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const revertHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].handler;
+      register(mockApi);
+      const revertExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].execute;
 
-      const result = await revertHandler({ senderId: 'u1', args: '' });
-      expect(result.text).toContain('确认回滚');
+      const result = await revertExecute({ userId: 'u1', input: '' });
+      expect(result.output).toContain('确认回滚');
     });
 
     it('shows no snapshot message when stashRef is null', async () => {
@@ -337,11 +330,11 @@ describe('command handlers', () => {
       bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', cwd: '/ws', active: true, stashRef: null });
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const revertHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].handler;
+      register(mockApi);
+      const revertExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].execute;
 
-      const result = await revertHandler({ senderId: 'u1', args: '' });
-      expect(result.text).toContain('无可用的快照');
+      const result = await revertExecute({ userId: 'u1', input: '' });
+      expect(result.output).toContain('无可用的快照');
     });
 
     it('shows no snapshot message when --confirm but no stashRef', async () => {
@@ -350,20 +343,20 @@ describe('command handlers', () => {
       bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', cwd: '/ws', active: true, stashRef: null });
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const revertHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].handler;
+      register(mockApi);
+      const revertExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].execute;
 
-      const result = await revertHandler({ senderId: 'u1', args: '--confirm' });
-      expect(result.text).toContain('无可用的快照');
+      const result = await revertExecute({ userId: 'u1', input: '--confirm' });
+      expect(result.output).toContain('无可用的快照');
     });
 
     it('cancels revert when --cancel', async () => {
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const revertHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].handler;
+      register(mockApi);
+      const revertExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_revert')[0].execute;
 
-      const result = await revertHandler({ senderId: 'u1', args: '--cancel' });
-      expect(result.text).toContain('已取消');
+      const result = await revertExecute({ userId: 'u1', input: '--cancel' });
+      expect(result.output).toContain('已取消');
     });
   });
 
@@ -373,11 +366,11 @@ describe('command handlers', () => {
       bridgeInstance.findActiveSession.mockReturnValue(null);
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
-      const ctxHandler = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_context')[0].handler;
+      register(mockApi);
+      const ctxExecute = mockApi.registerCommand.mock.calls.find(c => c[0].name === 'cc_context')[0].execute;
 
-      const result = await ctxHandler({ senderId: 'u1' });
-      expect(result.text).toContain('没有活跃');
+      const result = await ctxExecute({ userId: 'u1' });
+      expect(result.output).toContain('没有活跃');
     });
   });
 
@@ -388,15 +381,13 @@ describe('command handlers', () => {
       bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', cwd: '/ws', active: true });
 
       mockApi.registerCommand.mockClear();
-      init(mockApi, config);
+      register(mockApi);
 
-      // Manually trigger startServices to set up approvalServer and onApprovalNeeded
       const gatewayStartCall = mockApi.on.mock.calls.find(c => c[0] === 'gateway_start');
       if (gatewayStartCall) {
         await gatewayStartCall[1]();
       }
 
-      // Get the latest server instance
       const latestResult = ApprovalServer.mock.results[ApprovalServer.mock.results.length - 1].value;
       latestResult.onApprovalNeeded('abc12345-6789', {
         sessionId: 's1',
@@ -405,7 +396,6 @@ describe('command handlers', () => {
         cwd: '/ws'
       });
 
-      // The notification should be sent via the outbound adapter
       expect(mockApi.runtime.channel.outbound.loadAdapter).toHaveBeenCalled();
     });
   });

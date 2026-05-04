@@ -2,6 +2,23 @@
   "id": "claude-code-gateway",
   "name": "Claude Code Gateway",
   "description": "A gateway bridge connecting Claude Code CLI to messaging platforms with approval control, session management, and rollback support",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "commands": [
+      "cc",
+      "cc_start",
+      "cc_stop",
+      "cc_status",
+      "cc_answer",
+      "cc_approve",
+      "cc_deny",
+      "cc_revert",
+      "cc_context",
+      "cc_mode"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -42,6 +59,10 @@
       "approvalRulesPath": {
         "type": "string",
         "description": "审批规则 YAML 文件路径"
+      },
+      "sharedSecret": {
+        "type": "string",
+        "description": "审批响应端点认证密钥（生产环境必填）"
       }
     }
   }
