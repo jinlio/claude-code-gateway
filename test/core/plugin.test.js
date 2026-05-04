@@ -145,7 +145,7 @@ describe('inbound_claim handler', () => {
     register(mockApi);
     const handler = mockApi.on.mock.calls.find(c => c[0] === 'inbound_claim')[1];
 
-    const result = await handler({ content: 'hello', senderId: 'u1' }, { channelId: 'feishu' });
+    const result = await handler({ CommandBody: 'hello', senderId: 'u1' }, { channelId: 'feishu' });
     expect(result).toBeUndefined();
   });
 
@@ -154,7 +154,7 @@ describe('inbound_claim handler', () => {
     register(mockApi);
     const handler = mockApi.on.mock.calls.find(c => c[0] === 'inbound_claim')[1];
 
-    const result = await handler({ content: '/help', senderId: 'u1' }, { channelId: 'feishu' });
+    const result = await handler({ CommandBody: '/help', senderId: 'u1' }, { channelId: 'feishu' });
     expect(result).toBeUndefined();
   });
 
@@ -163,7 +163,7 @@ describe('inbound_claim handler', () => {
     register(mockApi);
     const handler = mockApi.on.mock.calls.find(c => c[0] === 'inbound_claim')[1];
 
-    const result = await handler({ content: '/cc_mode', senderId: 'u1' }, { channelId: 'feishu' });
+    const result = await handler({ CommandBody: '/cc_mode', senderId: 'u1' }, { channelId: 'feishu' });
     expect(result).toEqual({ handled: true, reply: expect.objectContaining({ text: expect.any(String) }) });
     expect(result.reply.text).toContain('当前模式');
   });
@@ -176,7 +176,7 @@ describe('inbound_claim handler', () => {
     register(mockApi);
     const handler = mockApi.on.mock.calls.find(c => c[0] === 'inbound_claim')[1];
 
-    const result = await handler({ content: '/cc 检查项目状态', senderId: 'u1' }, { channelId: 'feishu', senderId: 'u1' });
+    const result = await handler({ CommandBody: '/cc 检查项目状态', senderId: 'u1' }, { channelId: 'feishu', senderId: 'u1' });
     expect(result.handled).toBe(true);
     expect(result.reply.text).toContain('任务已提交');
   });

@@ -36,6 +36,10 @@
   "openclaw": {
     "extensions": ["./src/plugin/entry.mjs"],
     "runtimeExtensions": ["./src/plugin/entry.mjs"],
+    "install": {
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.25"
+    },
     "compat": {
       "pluginApi": ">=2026.3.24-beta.2",
       "minGatewayVersion": "2026.3.24-beta.2"

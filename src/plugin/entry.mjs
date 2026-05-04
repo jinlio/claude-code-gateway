@@ -106,7 +106,8 @@ const plugin = {
 
     // Intercept /cc commands via inbound_claim hook
     api.on('inbound_claim', async (event, ctx) => {
-      const content = (event.content || '').trim();
+      // OpenClaw inbound_claim uses CommandBody (PascalCase) for command text
+      const content = (event.CommandBody || event.commandBody || event.content || '').trim();
       if (!content.startsWith('/')) return;
 
       const withoutSlash = content.slice(1);
