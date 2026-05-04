@@ -1,5 +1,7 @@
 # Claude Code Gateway
 
+> **⚠️ This project is under active development and not yet functional. The features described below are planned, not currently available. This notice will be removed once development is complete.**
+
 A gateway bridge connecting [Claude Code](https://claude.ai/code) CLI to messaging platforms (Feishu/Lark, WeCom, etc.) with approval control, session management, and rollback support.
 
 Inspired by [openclaw-cc-bridge](https://github.com/cadl/openclaw-cc-bridge), with major architectural redesign for reliability, security, and developer experience.
