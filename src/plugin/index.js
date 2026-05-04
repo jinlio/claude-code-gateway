@@ -1,6 +1,6 @@
-// Plugin entry point — command registration, session orchestration, message forwarding
-// OpenClaw plugin spec: register(api) pattern, api.registerCommand with execute() handler
-// CJS version kept for backward compatibility and testing; ESM entry.mjs is the OpenClaw runtime entry
+// Plugin entry point — CJS version for backward compat and testing
+// OpenClaw plugin spec: register(api) pattern, inbound_claim hook for /cc commands
+// ESM entry.mjs is the OpenClaw runtime entry; this CJS file mirrors the same logic
 
 const path = require('path');
 const { ClaudeBridge } = require('../core/claude-bridge');
@@ -12,6 +12,8 @@ const { PersistentSessionManager } = require('../core/persistent-session-manager
 const { ContextManager } = require('../core/context-manager');
 const { FeishuMessenger } = require('../core/feishu-messenger');
 const { CommandParser } = require('../core/command-parser');
+
+const CC_COMMANDS = ['cc', 'cc_start', 'cc_stop', 'cc_status', 'cc_answer', 'cc_approve', 'cc_deny', 'cc_revert', 'cc_context', 'cc_mode'];
 
 let bridge;
 let approvalServer;
@@ -44,6 +46,8 @@ function register(api) {
     currentMode = pluginConfig.defaultMode;
   }
 
+  const defaultWorkspace = pluginConfig.workspace || process.cwd();
+
   if (api?.on) {
     api.on('gateway_start', async () => {
       await startServices(dataDir);
@@ -52,9 +56,28 @@ function register(api) {
     api.on('gateway_stop', () => {
       stopServices();
     });
-  }
 
-  registerCommands(api);
+    // Intercept /cc commands via inbound_claim hook
+    api.on('inbound_claim', async (event, ctx) => {
+      const content = (event.content || '').trim();
+      if (!content.startsWith('/')) return;
+
+      const withoutSlash = content.slice(1);
+      const spaceIdx = withoutSlash.indexOf(' ');
+      const commandName = spaceIdx === -1 ? withoutSlash : withoutSlash.slice(0, spaceIdx);
+
+      if (!CC_COMMANDS.includes(commandName)) return;
+
+      const args = spaceIdx === -1 ? '' : withoutSlash.slice(spaceIdx + 1).trim();
+
+      const senderId = event.senderId || ctx.senderId;
+      const accountId = ctx.accountId;
+      const channelId = ctx.channelId;
+
+      const result = await handleCommand(commandName, args, senderId, channelId, accountId);
+      return { handled: true, reply: { text: result } };
+    }, { priority: 100 });
+  }
 }
 
 async function startServices(dataDir) {
@@ -63,7 +86,7 @@ async function startServices(dataDir) {
       for (const [sid, meta] of [...bridge.sessionMeta.entries()]) {
         if (meta.active) {
           const route = sessionRoutes.get(sid);
-          messenger.sendToUser(route?.userId || meta.senderId, info.text, {
+          messenger.sendToUser(route?.senderId || meta.senderId, info.text, {
             channelId: route?.channelId,
             accountId: route?.accountId
           });
@@ -85,7 +108,7 @@ async function startServices(dataDir) {
     const inputPreview = formatToolInput(params.toolName, params.toolInput);
     const meta = bridge.sessionMeta.get(params.sessionId);
     const route = sessionRoutes.get(params.sessionId);
-    const target = route?.userId || meta?.senderId || params.sessionId;
+    const target = route?.senderId || meta?.senderId || params.sessionId;
     const notification = messenger.formatApprovalNotification(id, params.toolName, inputPreview, params.cwd);
     messenger.sendToUser(target, notification, {
       channelId: route?.channelId,
@@ -115,28 +138,17 @@ function formatToolInput(toolName, rawInput) {
   }
 }
 
-function handleIncomingMessage(senderId, workspace, text) {
-  const parsed = commandParser.parse(text);
-  if (!parsed) return null;
-
-  if (parsed.unknown) {
-    return { output: `未知命令: ${parsed.args}\n\n${commandParser.getHelpText()}` };
-  }
-
-  return parsed;
-}
-
-function storeSessionRoute(sessionId, ctx) {
+function storeSessionRoute(sessionId, senderId, channelId, accountId) {
   sessionRoutes.set(sessionId, {
-    channelId: ctx.channelId || ctx.channel,
-    userId: ctx.userId || ctx.senderId,
-    accountId: ctx.accountId || ctx.config?.accountId
+    senderId,
+    channelId,
+    accountId,
   });
 }
 
 function setupProcessForwarding(proc, sessionId) {
   const route = sessionRoutes.get(sessionId);
-  const target = route?.userId;
+  const target = route?.senderId;
   let outputBuffer = '';
 
   proc.stdout.on('data', (chunk) => {
@@ -186,289 +198,222 @@ function setupProcessForwarding(proc, sessionId) {
   });
 }
 
-function registerCommands(api) {
+async function handleCommand(commandName, args, senderId, channelId, accountId) {
   // /cc <prompt> — one-shot task
-  api.registerCommand({
-    name: 'cc',
-    description: '发送任务到 Claude Code',
-    execute: async (ctx) => {
-      const prompt = (ctx.input || ctx.args)?.trim();
-      if (!prompt) {
-        return { output: '用法: /cc <任务描述>' };
+  if (commandName === 'cc') {
+    const prompt = args.trim();
+    if (!prompt) return '用法: /cc <任务描述>';
+
+    const workspace = pluginConfig.workspace || process.cwd();
+    const existingSessionId = bridge.findActiveSession(senderId);
+    if (existingSessionId) {
+      const proc = bridge.processMap.get(existingSessionId);
+      if (proc && proc.exitCode === null) {
+        proc.stdin.write(prompt + '\n');
+        bridge.updateActivity(existingSessionId);
+        return '已发送到持久会话。';
       }
-
-      const userId = ctx.userId || ctx.senderId;
-      const workspace = ctx.workspace || process.cwd();
-
-      const existingSessionId = bridge.findActiveSession(userId);
-      if (existingSessionId) {
-        const proc = bridge.processMap.get(existingSessionId);
-        if (proc && proc.exitCode === null) {
-          proc.stdin.write(prompt + '\n');
-          bridge.updateActivity(existingSessionId);
-          return { output: '已发送到持久会话。' };
-        }
-      }
-
-      const { sessionId } = await bridge.spawnSession(userId, workspace, prompt);
-      storeSessionRoute(sessionId, ctx);
-      const proc = bridge.processMap.get(sessionId);
-      if (proc) setupProcessForwarding(proc, sessionId);
-
-      return { output: `任务已提交 (ID: ${sessionId.slice(0, 8)})` };
     }
-  });
+
+    const { sessionId } = await bridge.spawnSession(senderId, workspace, prompt);
+    storeSessionRoute(sessionId, senderId, channelId, accountId);
+    const proc = bridge.processMap.get(sessionId);
+    if (proc) setupProcessForwarding(proc, sessionId);
+
+    return `任务已提交 (ID: ${sessionId.slice(0, 8)})`;
+  }
 
   // /cc_start — start persistent session
-  api.registerCommand({
-    name: 'cc_start',
-    description: '启动持久会话',
-    execute: async (ctx) => {
-      const userId = ctx.userId || ctx.senderId;
-      const workspace = ctx.workspace || process.cwd();
-
-      const existing = bridge.findActiveSession(userId);
-      if (existing) {
-        const meta = bridge.sessionMeta.get(existing);
-        const proc = bridge.processMap.get(existing);
-        return { output: messenger.formatSessionStatus(meta, proc, existing) };
-      }
-
-      const { sessionId } = await bridge.spawnSession(userId, workspace, '');
-      storeSessionRoute(sessionId, ctx);
-      sessionManager.activate(userId, workspace, sessionId);
-
-      const proc = bridge.processMap.get(sessionId);
-      if (proc) setupProcessForwarding(proc, sessionId);
-
-      let contextManager = contextManagers.get(workspace);
-      if (!contextManager) {
-        contextManager = new ContextManager(workspace);
-        contextManagers.set(workspace, contextManager);
-      }
-      contextManager.cleanOrphanedRules(bridge);
-      contextManager.injectRules();
-
-      const gitSnapshotEnabled = pluginConfig.gitSnapshotEnabled !== false;
-      const snapshot = new GitSnapshot(bridge, sessionId);
-      const snapshotCreated = gitSnapshotEnabled ? snapshot.create() : false;
-
-      const port = approvalServer?.getPort();
-      if (port && hookInbox) {
-        hookInbox.writeHookConfig(
-          path.join(workspace, '.claude', 'settings.local.json'),
-          port,
-          currentMode === 'efficient' ? 'Bash' : 'Bash|Write|Edit'
-        );
-      }
-
-      return {
-        output: `持久会话已启动 (ID: ${sessionId.slice(0, 8)})\n模式: ${currentMode}\n审批服务端口: ${port}\n快照: ${snapshotCreated ? '已创建' : '未创建（非Git目录）'}`
-      };
+  if (commandName === 'cc_start') {
+    const workspace = pluginConfig.workspace || process.cwd();
+    const existing = bridge.findActiveSession(senderId);
+    if (existing) {
+      const meta = bridge.sessionMeta.get(existing);
+      const proc = bridge.processMap.get(existing);
+      return messenger.formatSessionStatus(meta, proc, existing);
     }
-  });
+
+    const { sessionId } = await bridge.spawnSession(senderId, workspace, '');
+    storeSessionRoute(sessionId, senderId, channelId, accountId);
+    sessionManager.activate(senderId, workspace, sessionId);
+
+    const proc = bridge.processMap.get(sessionId);
+    if (proc) setupProcessForwarding(proc, sessionId);
+
+    let contextManager = contextManagers.get(workspace);
+    if (!contextManager) {
+      contextManager = new ContextManager(workspace);
+      contextManagers.set(workspace, contextManager);
+    }
+    contextManager.cleanOrphanedRules(bridge);
+    contextManager.injectRules();
+
+    const gitSnapshotEnabled = pluginConfig.gitSnapshotEnabled !== false;
+    const snapshot = new GitSnapshot(bridge, sessionId);
+    const snapshotCreated = gitSnapshotEnabled ? snapshot.create() : false;
+
+    const port = approvalServer?.getPort();
+    if (port && hookInbox) {
+      hookInbox.writeHookConfig(
+        path.join(workspace, '.claude', 'settings.local.json'),
+        port,
+        currentMode === 'efficient' ? 'Bash' : 'Bash|Write|Edit'
+      );
+    }
+
+    return `持久会话已启动 (ID: ${sessionId.slice(0, 8)})\n模式: ${currentMode}\n审批服务端口: ${port}\n快照: ${snapshotCreated ? '已创建' : '未创建（非Git目录）'}`;
+  }
 
   // /cc_stop — stop persistent session
-  api.registerCommand({
-    name: 'cc_stop',
-    description: '停止持久会话',
-    execute: async (ctx) => {
-      const userId = ctx.userId || ctx.senderId;
-      const sessionId = bridge.findActiveSession(userId);
-      if (!sessionId || !bridge.sessionMeta.get(sessionId)?.active) {
-        return { output: '当前没有持久会话。' };
-      }
-
-      const meta = bridge.sessionMeta.get(sessionId);
-      if (meta.senderId !== userId) {
-        return { output: '无权停止该会话，只有会话创建者可以停止。' };
-      }
-
-      bridge.terminateSession(sessionId);
-      sessionManager.deactivate(userId);
-      sessionRoutes.delete(sessionId);
-
-      const snapshot = new GitSnapshot(bridge, sessionId);
-      if (meta.stashRef) snapshot.dropStash();
-
-      const cm = contextManagers.get(meta.cwd);
-      if (cm) {
-        cm.cleanup();
-        contextManagers.delete(meta.cwd);
-      }
-
-      GitSnapshot.cleanupOldStashes(bridge, meta.cwd);
-
-      const runtime = Math.round((Date.now() - new Date(meta.startedAt).getTime()) / 60000);
-      return { output: `会话已停止 (ID: ${sessionId.slice(0, 8)})\n运行时长: ${runtime} 分钟\n消息数: ${meta.messageCount}` };
+  if (commandName === 'cc_stop') {
+    const sessionId = bridge.findActiveSession(senderId);
+    if (!sessionId || !bridge.sessionMeta.get(sessionId)?.active) {
+      return '当前没有持久会话。';
     }
-  });
+
+    const meta = bridge.sessionMeta.get(sessionId);
+    if (meta.senderId !== senderId) {
+      return '无权停止该会话，只有会话创建者可以停止。';
+    }
+
+    bridge.terminateSession(sessionId);
+    sessionManager.deactivate(senderId);
+    sessionRoutes.delete(sessionId);
+
+    const snapshot = new GitSnapshot(bridge, sessionId);
+    if (meta.stashRef) snapshot.dropStash();
+
+    const cm = contextManagers.get(meta.cwd);
+    if (cm) {
+      cm.cleanup();
+      contextManagers.delete(meta.cwd);
+    }
+
+    GitSnapshot.cleanupOldStashes(bridge, meta.cwd);
+
+    const runtime = Math.round((Date.now() - new Date(meta.startedAt).getTime()) / 60000);
+    return `会话已停止 (ID: ${sessionId.slice(0, 8)})\n运行时长: ${runtime} 分钟\n消息数: ${meta.messageCount}`;
+  }
 
   // /cc_status — check session status
-  api.registerCommand({
-    name: 'cc_status',
-    description: '查看会话状态',
-    execute: async (ctx) => {
-      const userId = ctx.userId || ctx.senderId;
-      const sessionId = bridge.findActiveSession(userId);
-      if (!sessionId) {
-        return { output: '当前没有活跃的持久会话。' };
-      }
-      const meta = bridge.sessionMeta.get(sessionId);
-      const proc = bridge.processMap.get(sessionId);
-      return { output: messenger.formatSessionStatus(meta, proc, sessionId) };
-    }
-  });
+  if (commandName === 'cc_status') {
+    const sessionId = bridge.findActiveSession(senderId);
+    if (!sessionId) return '当前没有活跃的持久会话。';
+    const meta = bridge.sessionMeta.get(sessionId);
+    const proc = bridge.processMap.get(sessionId);
+    return messenger.formatSessionStatus(meta, proc, sessionId);
+  }
 
   // /cc_answer — reply to Claude's question
-  api.registerCommand({
-    name: 'cc_answer',
-    description: '回答 Claude Code 的问题',
-    execute: async (ctx) => {
-      const answer = (ctx.input || ctx.args)?.trim();
-      if (!answer) {
-        return { output: '用法: /cc_answer <回答内容>' };
-      }
+  if (commandName === 'cc_answer') {
+    const answer = args.trim();
+    if (!answer) return '用法: /cc_answer <回答内容>';
 
-      const userId = ctx.userId || ctx.senderId;
-      const sessionId = bridge.findActiveSession(userId);
-      if (!sessionId) {
-        return { output: '没有活跃会话。' };
-      }
+    const sessionId = bridge.findActiveSession(senderId);
+    if (!sessionId) return '没有活跃会话。';
 
-      const proc = bridge.processMap.get(sessionId);
-      if (proc && proc.exitCode === null) {
-        proc.stdin.write(answer + '\n');
-        bridge.updateActivity(sessionId);
-        return { output: '已发送回答。' };
-      }
-      return { output: '会话进程已退出，无法回答。' };
+    const proc = bridge.processMap.get(sessionId);
+    if (proc && proc.exitCode === null) {
+      proc.stdin.write(answer + '\n');
+      bridge.updateActivity(sessionId);
+      return '已发送回答。';
     }
-  });
+    return '会话进程已退出，无法回答。';
+  }
 
   // /cc_approve — approve a pending request
-  api.registerCommand({
-    name: 'cc_approve',
-    description: '批准审批请求',
-    execute: async (ctx) => {
-      const shortId = (ctx.input || ctx.args)?.trim();
-      if (!shortId) return { output: '用法: /cc_approve <审批ID>' };
+  if (commandName === 'cc_approve') {
+    const shortId = args.trim();
+    if (!shortId) return '用法: /cc_approve <审批ID>';
 
-      const item = approvalServer.store.findByShortId(shortId);
-      if (!item) return { output: '未找到该审批请求。' };
-      if (item.ambiguous) return { output: `ID "${shortId}" 匹配到多个请求，请使用更长的ID。\n匹配: ${item.matches.map(m => m.id.slice(0, 12)).join(', ')}` };
-      if (item.status !== 'PENDING') return { output: `该请求已处理: ${item.status}` };
+    const item = approvalServer.store.findByShortId(shortId);
+    if (!item) return '未找到该审批请求。';
+    if (item.ambiguous) return `ID "${shortId}" 匹配到多个请求，请使用更长的ID。\n匹配: ${item.matches.map(m => m.id.slice(0, 12)).join(', ')}`;
+    if (item.status !== 'PENDING') return `该请求已处理: ${item.status}`;
 
-      const userId = ctx.userId || ctx.senderId;
-      const meta = bridge.sessionMeta.get(item.sessionId);
-      if (meta && meta.senderId !== userId) {
-        return { output: '无权审批该请求，只有会话创建者可以操作。' };
-      }
-
-      approvalServer.store.resolve(item.id, 'APPROVED');
-      return { output: `已批准 #${shortId}: ${item.toolName}` };
+    const meta = bridge.sessionMeta.get(item.sessionId);
+    if (meta && meta.senderId !== senderId) {
+      return '无权审批该请求，只有会话创建者可以操作。';
     }
-  });
+
+    approvalServer.store.resolve(item.id, 'APPROVED');
+    return `已批准 #${shortId}: ${item.toolName}`;
+  }
 
   // /cc_deny — deny a pending request
-  api.registerCommand({
-    name: 'cc_deny',
-    description: '拒绝审批请求',
-    execute: async (ctx) => {
-      const shortId = (ctx.input || ctx.args)?.trim();
-      if (!shortId) return { output: '用法: /cc_deny <审批ID>' };
+  if (commandName === 'cc_deny') {
+    const shortId = args.trim();
+    if (!shortId) return '用法: /cc_deny <审批ID>';
 
-      const item = approvalServer.store.findByShortId(shortId);
-      if (!item) return { output: '未找到该审批请求。' };
-      if (item.ambiguous) return { output: `ID "${shortId}" 匹配到多个请求，请使用更长的ID。\n匹配: ${item.matches.map(m => m.id.slice(0, 12)).join(', ')}` };
-      if (item.status !== 'PENDING') return { output: `该请求已处理: ${item.status}` };
+    const item = approvalServer.store.findByShortId(shortId);
+    if (!item) return '未找到该审批请求。';
+    if (item.ambiguous) return `ID "${shortId}" 匹配到多个请求，请使用更长的ID。\n匹配: ${item.matches.map(m => m.id.slice(0, 12)).join(', ')}`;
+    if (item.status !== 'PENDING') return `该请求已处理: ${item.status}`;
 
-      const userId = ctx.userId || ctx.senderId;
-      const meta = bridge.sessionMeta.get(item.sessionId);
-      if (meta && meta.senderId !== userId) {
-        return { output: '无权审批该请求，只有会话创建者可以操作。' };
-      }
-
-      approvalServer.store.resolve(item.id, 'DENIED');
-      return { output: `已拒绝 #${shortId}: ${item.toolName}` };
+    const meta = bridge.sessionMeta.get(item.sessionId);
+    if (meta && meta.senderId !== senderId) {
+      return '无权审批该请求，只有会话创建者可以操作。';
     }
-  });
+
+    approvalServer.store.resolve(item.id, 'DENIED');
+    return `已拒绝 #${shortId}: ${item.toolName}`;
+  }
 
   // /cc_revert — rollback code changes
-  api.registerCommand({
-    name: 'cc_revert',
-    description: '回滚代码变更',
-    execute: async (ctx) => {
-      const args = (ctx.input || ctx.args)?.trim();
+  if (commandName === 'cc_revert') {
+    const revertArgs = args.trim();
 
-      if (args === '--confirm') {
-        const userId = ctx.userId || ctx.senderId;
-        const sessionId = bridge.findActiveSession(userId);
-        if (!sessionId) return { output: '没有活跃的会话。' };
-
-        const meta = bridge.sessionMeta.get(sessionId);
-        if (!meta?.stashRef) return { output: '无可用的快照，无法回滚。（可能已回滚过或启动时未创建快照）' };
-
-        const snapshot = new GitSnapshot(bridge, sessionId);
-        const result = snapshot.revert();
-        return { output: result.success ? '已回滚到任务前状态。' : `回滚失败: ${result.message}` };
-      }
-
-      if (args === '--cancel') {
-        return { output: '已取消回滚。' };
-      }
-
-      const userId = ctx.userId || ctx.senderId;
-      const sessionId = bridge.findActiveSession(userId);
-      if (!sessionId) return { output: '没有活跃的会话。' };
+    if (revertArgs === '--confirm') {
+      const sessionId = bridge.findActiveSession(senderId);
+      if (!sessionId) return '没有活跃的会话。';
 
       const meta = bridge.sessionMeta.get(sessionId);
-      if (!meta?.stashRef) return { output: '无可用的快照。（可能已回滚过或启动时未创建快照）' };
+      if (!meta?.stashRef) return '无可用的快照，无法回滚。（可能已回滚过或启动时未创建快照）';
 
-      return {
-        output: `确认回滚？\n将恢复到上次 CC 任务前的状态。\n\n确认: /cc_revert --confirm\n取消: /cc_revert --cancel`
-      };
+      const snapshot = new GitSnapshot(bridge, sessionId);
+      const result = snapshot.revert();
+      return result.success ? '已回滚到任务前状态。' : `回滚失败: ${result.message}`;
     }
-  });
+
+    if (revertArgs === '--cancel') return '已取消回滚。';
+
+    const sessionId = bridge.findActiveSession(senderId);
+    if (!sessionId) return '没有活跃的会话。';
+
+    const meta = bridge.sessionMeta.get(sessionId);
+    if (!meta?.stashRef) return '无可用的快照。（可能已回滚过或启动时未创建快照）';
+
+    return `确认回滚？\n将恢复到上次 CC 任务前的状态。\n\n确认: /cc_revert --confirm\n取消: /cc_revert --cancel`;
+  }
 
   // /cc_context — view project context
-  api.registerCommand({
-    name: 'cc_context',
-    description: '查看项目上下文信息',
-    execute: async (ctx) => {
-      const userId = ctx.userId || ctx.senderId;
-      const sessionId = bridge.findActiveSession(userId);
-      if (!sessionId) return { output: '没有活跃会话。' };
+  if (commandName === 'cc_context') {
+    const sessionId = bridge.findActiveSession(senderId);
+    if (!sessionId) return '没有活跃会话。';
 
-      const meta = bridge.sessionMeta.get(sessionId);
-      const cm = contextManagers.get(meta.cwd);
-      const contextInfo = cm?.buildContextPrompt(meta.cwd) || '(无上下文)';
-      return { output: `当前项目上下文:\n\n${contextInfo}` };
-    }
-  });
+    const meta = bridge.sessionMeta.get(sessionId);
+    const cm = contextManagers.get(meta.cwd);
+    const contextInfo = cm?.buildContextPrompt(meta.cwd) || '(无上下文)';
+    return `当前项目上下文:\n\n${contextInfo}`;
+  }
 
   // /cc_mode — switch approval mode
-  api.registerCommand({
-    name: 'cc_mode',
-    description: '切换审批模式',
-    execute: async (ctx) => {
-      const mode = (ctx.input || ctx.args)?.trim();
-      if (!mode || (mode !== 'efficient' && mode !== 'strict')) {
-        return {
-          output: `当前模式: ${currentMode}\nefficient — Edit/Write 免审批，仅 Bash 需审批\nstrict — 全部操作需审批\n\n切换: /cc_mode efficient 或 /cc_mode strict`
-        };
-      }
-
-      const matcher = mode === 'efficient' ? 'Bash' : 'Bash|Write|Edit';
-      if (hookInbox) hookInbox.updateMatcher(matcher);
-      if (approvalServer) approvalServer.setMode(mode);
-      currentMode = mode;
-      return { output: `已切换到 ${mode} 模式。` };
+  if (commandName === 'cc_mode') {
+    const mode = args.trim();
+    if (!mode || (mode !== 'efficient' && mode !== 'strict')) {
+      return `当前模式: ${currentMode}\nefficient — Edit/Write 免审批，仅 Bash 需审批\nstrict — 全部操作需审批\n\n切换: /cc_mode efficient 或 /cc_mode strict`;
     }
-  });
+
+    const matcher = mode === 'efficient' ? 'Bash' : 'Bash|Write|Edit';
+    if (hookInbox) hookInbox.updateMatcher(matcher);
+    if (approvalServer) approvalServer.setMode(mode);
+    currentMode = mode;
+    return `已切换到 ${mode} 模式。`;
+  }
+
+  return `未知命令: ${commandName}\n\n${commandParser.getHelpText()}`;
 }
 
-// Expose plugin definition and helpers for testing
 const pluginDefinition = {
   id: 'claude-code-gateway',
   name: 'Claude Code Gateway',
@@ -476,4 +421,4 @@ const pluginDefinition = {
   register
 };
 
-module.exports = { register, pluginDefinition, formatToolInput, handleIncomingMessage, setupProcessForwarding, FeishuMessenger, CommandParser };
+module.exports = { register, pluginDefinition, formatToolInput, handleCommand, storeSessionRoute, setupProcessForwarding, FeishuMessenger, CommandParser };
