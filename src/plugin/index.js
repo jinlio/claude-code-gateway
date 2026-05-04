@@ -78,7 +78,8 @@ async function startServices(dataDir) {
   approvalServer = new ApprovalServer(dataDir, pluginConfig.approvalServerPort || 0, notifyCallback, approvalRules, currentMode);
   approvalServer.onApprovalNeeded = (id, params) => {
     const inputPreview = formatToolInput(params.toolName, params.toolInput);
-    const meta = bridge.sessionMeta.get(bridge.findActiveSession(params.sessionId));
+    // Look up senderId directly from sessionMeta by sessionId (not senderId)
+    const meta = bridge.sessionMeta.get(params.sessionId);
     const senderId = meta?.senderId || params.sessionId;
     const notification = messenger.formatApprovalNotification(id, params.toolName, inputPreview, params.cwd);
     messenger.sendToUser(senderId, notification);
@@ -86,11 +87,6 @@ async function startServices(dataDir) {
 
   const port = await approvalServer.start();
   hookInbox = new HookInbox();
-  hookInbox.writeHookConfig(
-    path.join(dataDir, 'hook-config.json'),
-    port,
-    currentMode === 'efficient' ? 'Bash' : 'Bash|Write|Edit'
-  );
 }
 
 function stopServices() {
@@ -263,7 +259,7 @@ function registerCommands(api) {
       // Check permission: only the session owner can stop it
       const meta = bridge.sessionMeta.get(sessionId);
       if (meta.senderId !== ctx.senderId) {
-        return { text: '当前没有持久会话。' };
+        return { text: '无权停止该会话，只有会话创建者可以停止。' };
       }
 
       bridge.terminateSession(sessionId);
@@ -423,9 +419,6 @@ function registerCommands(api) {
           text: `当前模式: ${currentMode}\nefficient — Edit/Write 免审批，仅 Bash 需审批\nstrict — 全部操作需审批\n\n切换: /cc_mode efficient 或 /cc_mode strict`
         };
       }
-
-      const sessionId = bridge.findActiveSession(ctx.senderId);
-      if (!sessionId) return { text: '没有活跃会话。' };
 
       const matcher = mode === 'efficient' ? 'Bash' : 'Bash|Write|Edit';
       if (hookInbox) hookInbox.updateMatcher(matcher);

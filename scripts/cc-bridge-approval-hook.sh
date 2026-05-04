@@ -1,12 +1,12 @@
 #!/bin/bash
 # cc-bridge approval hook (bash)
 # Claude Code PreToolUse hook
-# Args: $1=tool_name, $2=tool_input_json
+# Reads tool info from environment variables set by Claude Code
 
 BRIDGE_URL="${CC_BRIDGE_URL:-http://127.0.0.1:7890}"
 SESSION_ID="${CLAUDE_SESSION_ID:-unknown}"
-TOOL_NAME="$1"
-TOOL_INPUT="$2"
+TOOL_NAME="${CLAUDE_TOOL_NAME:-$1}"
+TOOL_INPUT="${CLAUDE_TOOL_INPUT:-$2}"
 CWD="$(pwd)"
 TIMESTAMP="$(date +%s)"
 
@@ -22,13 +22,13 @@ if [ $? -ne 0 ] || [ -z "$RESPONSE" ]; then
 fi
 
 # Check for auto-approved response (rule-based pre-check)
-STATUS=$(echo "$RESPONSE" | jq -r '.status // "UNKNOWN"')
-AUTO_APPROVED=$(echo "$RESPONSE" | jq -r '.autoApproved // false')
+STATUS=$(echo "$RESPONSE" | jq -r '.status // "UNKNOWN"' 2>/dev/null)
+AUTO_APPROVED=$(echo "$RESPONSE" | jq -r '.autoApproved // false' 2>/dev/null)
 if [ "$STATUS" = "APPROVED" ] && [ "$AUTO_APPROVED" = "true" ]; then
   exit 0
 fi
 
-APPROVAL_ID=$(echo "$RESPONSE" | jq -r '.approvalId // empty')
+APPROVAL_ID=$(echo "$RESPONSE" | jq -r '.approvalId // empty' 2>/dev/null)
 if [ -z "$APPROVAL_ID" ]; then
   echo "[cc-bridge] No approval ID obtained, auto-approve" >&2
   exit 0
@@ -46,7 +46,7 @@ for i in $(seq 1 150); do
     continue
   fi
 
-  STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "UNKNOWN"')
+  STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "UNKNOWN"' 2>/dev/null)
   case "$STATUS" in
     APPROVED) exit 0;;
     DENIED)   exit 2;;

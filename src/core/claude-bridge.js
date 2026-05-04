@@ -45,7 +45,8 @@ class ClaudeBridge {
     const lockRelease = await acquireWorkspaceLock(workspace);
 
     const sessionId = `cc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const args = ['--print', prompt];
+    const isOneShot = !!prompt;
+    const args = isOneShot ? ['--print', prompt] : [];
     if (options.model) args.push('--model', options.model);
     if (options.allowedTools) args.push('--allowedTools', options.allowedTools);
 

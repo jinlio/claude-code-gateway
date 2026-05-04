@@ -1,11 +1,11 @@
 // cc-bridge approval hook (Node.js, cross-platform)
 // Claude Code PreToolUse hook
-// Args: argv[2]=tool_name, argv[3]=tool_input_json
+// Reads tool info from environment variables set by Claude Code
 
 const BRIDGE_URL = process.env.CC_BRIDGE_URL || 'http://127.0.0.1:7890';
 const SESSION_ID = process.env.CLAUDE_SESSION_ID || 'unknown';
-const TOOL_NAME = process.argv[2] || 'unknown';
-const TOOL_INPUT = process.argv[3] || '{}';
+const TOOL_NAME = process.env.CLAUDE_TOOL_NAME || process.argv[2] || 'unknown';
+const TOOL_INPUT = process.env.CLAUDE_TOOL_INPUT || process.argv[3] || '{}';
 const CWD = process.cwd();
 
 async function requestApproval() {

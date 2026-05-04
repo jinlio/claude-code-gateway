@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { atomicWriteSync, safeLoadJson } = require('./utils');
 
 class HookInbox {
   constructor() {
@@ -16,31 +17,50 @@ class HookInbox {
       ? path.join(__dirname, '../../scripts/cc-bridge-approval-hook.mjs')
       : path.join(__dirname, '../../scripts/cc-bridge-approval-hook.sh');
 
-    const config = {
+    // Build the command — on Windows use node explicitly
+    const commandPrefix = process.platform === 'win32' ? 'node ' : '';
+    const hookCommand = `${commandPrefix}${hookScriptPath}`;
+
+    const newConfig = {
       hooks: {
         PreToolUse: [{
           matcher,
           hooks: [{
             type: 'command',
-            command: `${hookScriptPath} $CLAUDE_TOOL_NAME $CLAUDE_TOOL_INPUT`
+            command: hookCommand
           }]
         }]
       },
       env: {
-        CC_BRIDGE_URL: bridgeUrl,
-        CLAUDE_SESSION_ID: '$CLAUDE_SESSION_ID'
+        CC_BRIDGE_URL: bridgeUrl
       }
     };
 
-    fs.writeFileSync(outputPath, JSON.stringify(config, null, 2));
+    // Merge with existing config instead of overwriting
+    const existing = safeLoadJson(outputPath);
+    const merged = {
+      ...existing,
+      hooks: {
+        ...(existing.hooks || {}),
+        PreToolUse: newConfig.hooks.PreToolUse
+      },
+      env: {
+        ...(existing.env || {}),
+        ...newConfig.env
+      }
+    };
+
+    atomicWriteSync(outputPath, JSON.stringify(merged, null, 2));
     this.hookConfigPath = outputPath;
   }
 
   updateMatcher(matcher) {
     if (!this.hookConfigPath) return;
-    const config = JSON.parse(fs.readFileSync(this.hookConfigPath, 'utf8'));
-    config.hooks.PreToolUse[0].matcher = matcher;
-    fs.writeFileSync(this.hookConfigPath, JSON.stringify(config, null, 2));
+    const config = safeLoadJson(this.hookConfigPath);
+    if (config.hooks?.PreToolUse?.[0]) {
+      config.hooks.PreToolUse[0].matcher = matcher;
+      atomicWriteSync(this.hookConfigPath, JSON.stringify(config, null, 2));
+    }
   }
 }
 
