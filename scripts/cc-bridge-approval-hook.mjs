@@ -1,6 +1,7 @@
 // cc-bridge approval hook (Node.js, cross-platform)
 // Claude Code PreToolUse hook
 // Reads tool info from environment variables set by Claude Code
+// Fail-closed: denies operations when approval service is unreachable
 
 const BRIDGE_URL = process.env.CC_BRIDGE_URL || 'http://127.0.0.1:7890';
 const SESSION_ID = process.env.CLAUDE_SESSION_ID || 'unknown';
@@ -25,7 +26,8 @@ async function requestApproval() {
       signal: AbortSignal.timeout(10000)
     });
   } catch {
-    process.exit(0); // Service unreachable, auto-approve
+    // Fail-closed: deny when service is unreachable
+    process.exit(2);
   }
 
   const data = await res.json();
@@ -36,7 +38,8 @@ async function requestApproval() {
   }
 
   if (!data.approvalId) {
-    process.exit(0);  // No approval ID obtained, auto-approve
+    // No approval ID — deny (fail-closed)
+    process.exit(2);
   }
 
   // Phase 2: Poll approval status

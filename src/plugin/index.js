@@ -18,7 +18,7 @@ let approvalServer;
 let approvalRules;
 let hookInbox;
 let sessionManager;
-let contextManager;
+let contextManagers = new Map(); // workspace → ContextManager
 let messenger;
 let commandParser;
 let currentMode = 'efficient';
@@ -28,18 +28,13 @@ function init(api, config) {
   pluginConfig = config || api?.pluginConfig || {};
 
   const dataDir = pluginConfig.dataDir || './data';
-  bridge = new ClaudeBridge();
+  const bridgeOptions = {};
+  if (pluginConfig.sessionTimeout) bridgeOptions.sessionTimeout = pluginConfig.sessionTimeout * 60000;
+  if (pluginConfig.heartbeatInterval) bridgeOptions.heartbeatInterval = pluginConfig.heartbeatInterval * 1000;
+  bridge = new ClaudeBridge(bridgeOptions);
   sessionManager = new PersistentSessionManager(dataDir);
   messenger = new FeishuMessenger(api, { maxMessageLength: pluginConfig.maxMessageLength || 4000 });
   commandParser = new CommandParser();
-
-  // Apply config overrides for heartbeat/timeout
-  if (pluginConfig.sessionTimeout) {
-    bridge._sessionTimeout = pluginConfig.sessionTimeout * 60000;
-  }
-  if (pluginConfig.heartbeatInterval) {
-    bridge._heartbeatInterval = pluginConfig.heartbeatInterval * 1000;
-  }
 
   // Load approval rules first (needed by server)
   const rulesPath = pluginConfig.approvalRulesPath || path.join(__dirname, '../../config/cc-approval-rules.yml');
@@ -75,7 +70,7 @@ async function startServices(dataDir) {
     }
   };
 
-  approvalServer = new ApprovalServer(dataDir, pluginConfig.approvalServerPort || 0, notifyCallback, approvalRules, currentMode);
+  approvalServer = new ApprovalServer(dataDir, pluginConfig.approvalServerPort || 0, notifyCallback, approvalRules, currentMode, pluginConfig.sharedSecret || null);
   approvalServer.onApprovalNeeded = (id, params) => {
     const inputPreview = formatToolInput(params.toolName, params.toolInput);
     // Look up senderId directly from sessionMeta by sessionId (not senderId)
@@ -96,9 +91,10 @@ function stopServices() {
   if (bridge) {
     bridge.stopHeartbeat();
   }
-  if (contextManager) {
-    contextManager.cleanup();
+  for (const cm of contextManagers.values()) {
+    cm.cleanup();
   }
+  contextManagers.clear();
 }
 
 function formatToolInput(toolName, rawInput) {
@@ -221,7 +217,11 @@ function registerCommands(api) {
       }
 
       // Clean orphaned rules from previous sessions
-      contextManager = new ContextManager(workspace);
+      let contextManager = contextManagers.get(workspace);
+      if (!contextManager) {
+        contextManager = new ContextManager(workspace);
+        contextManagers.set(workspace, contextManager);
+      }
       contextManager.cleanOrphanedRules(bridge);
 
       // Inject context rules for this session
@@ -272,8 +272,10 @@ function registerCommands(api) {
       }
 
       // Clean up injected rules
-      if (contextManager) {
-        contextManager.cleanup();
+      const cm = contextManagers.get(meta.cwd);
+      if (cm) {
+        cm.cleanup();
+        contextManagers.delete(meta.cwd);
       }
 
       // Cleanup old stashes periodically
@@ -335,7 +337,14 @@ function registerCommands(api) {
 
       const item = approvalServer.store.findByShortId(shortId);
       if (!item) return { text: '未找到该审批请求。' };
+      if (item.ambiguous) return { text: `ID "${shortId}" 匹配到多个请求，请使用更长的ID。\n匹配: ${item.matches.map(m => m.id.slice(0, 12)).join(', ')}` };
       if (item.status !== 'PENDING') return { text: `该请求已处理: ${item.status}` };
+
+      // Ownership check: only the session owner can approve
+      const meta = bridge.sessionMeta.get(item.sessionId);
+      if (meta && meta.senderId !== ctx.senderId) {
+        return { text: '无权审批该请求，只有会话创建者可以操作。' };
+      }
 
       approvalServer.store.resolve(item.id, 'APPROVED');
       return { text: `已批准 #${shortId}: ${item.toolName}` };
@@ -352,7 +361,14 @@ function registerCommands(api) {
 
       const item = approvalServer.store.findByShortId(shortId);
       if (!item) return { text: '未找到该审批请求。' };
+      if (item.ambiguous) return { text: `ID "${shortId}" 匹配到多个请求，请使用更长的ID。\n匹配: ${item.matches.map(m => m.id.slice(0, 12)).join(', ')}` };
       if (item.status !== 'PENDING') return { text: `该请求已处理: ${item.status}` };
+
+      // Ownership check: only the session owner can deny
+      const meta = bridge.sessionMeta.get(item.sessionId);
+      if (meta && meta.senderId !== ctx.senderId) {
+        return { text: '无权审批该请求，只有会话创建者可以操作。' };
+      }
 
       approvalServer.store.resolve(item.id, 'DENIED');
       return { text: `已拒绝 #${shortId}: ${item.toolName}` };
@@ -403,7 +419,8 @@ function registerCommands(api) {
       if (!sessionId) return { text: '没有活跃会话。' };
 
       const meta = bridge.sessionMeta.get(sessionId);
-      const context = contextManager?.buildContextPrompt(meta.cwd) || '(无上下文)';
+      const cm = contextManagers.get(meta.cwd);
+      const context = cm?.buildContextPrompt(meta.cwd) || '(无上下文)';
       return { text: `当前项目上下文:\n\n${context}` };
     }
   });

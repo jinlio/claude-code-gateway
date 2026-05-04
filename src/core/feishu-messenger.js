@@ -88,6 +88,7 @@ class FeishuMessenger {
       }
 
       let splitAt = this.findSplitPoint(remaining, this.maxMessageLength);
+      splitAt = Math.max(splitAt, 1); // Prevent infinite loop when splitAt is 0
 
       // Preserve code blocks across splits
       const beforeSplit = remaining.slice(0, splitAt);

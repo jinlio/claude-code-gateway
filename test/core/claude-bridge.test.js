@@ -1,6 +1,6 @@
 // Tests for claude-bridge.js — dual Map, spawnSession, exit listener, heartbeat, timeout
 
-const { ClaudeBridge, HEARTBEAT_INTERVAL, SESSION_TIMEOUT } = require('../../src/core/claude-bridge');
+const { ClaudeBridge, DEFAULT_HEARTBEAT_INTERVAL, DEFAULT_SESSION_TIMEOUT } = require('../../src/core/claude-bridge');
 const { spawn } = require('child_process');
 
 // Mock child_process.spawn
@@ -167,7 +167,7 @@ describe('ClaudeBridge', () => {
     it('stops heartbeat when no active sessions remain', () => {
       bridge.sessionMeta.set('s1', { senderId: 'user1', active: false });
       bridge.startHeartbeat();
-      jest.advanceTimersByTime(HEARTBEAT_INTERVAL);
+      jest.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL);
       expect(bridge._heartbeatTimer).toBeNull();
     });
 
@@ -175,11 +175,11 @@ describe('ClaudeBridge', () => {
       bridge.processMap.set('s1', mockProc);
       bridge.sessionMeta.set('s1', {
         senderId: 'user1', active: true,
-        lastActiveAt: new Date(Date.now() - SESSION_TIMEOUT - 1000).toISOString(),
+        lastActiveAt: new Date(Date.now() - DEFAULT_SESSION_TIMEOUT - 1000).toISOString(),
         lockRelease: jest.fn()
       });
       bridge.startHeartbeat();
-      jest.advanceTimersByTime(HEARTBEAT_INTERVAL);
+      jest.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL);
       expect(bridge.sessionMeta.get('s1').active).toBe(false);
     });
 
@@ -191,7 +191,7 @@ describe('ClaudeBridge', () => {
         lockRelease: jest.fn()
       });
       bridge.startHeartbeat();
-      jest.advanceTimersByTime(HEARTBEAT_INTERVAL);
+      jest.advanceTimersByTime(DEFAULT_HEARTBEAT_INTERVAL);
       expect(bridge.sessionMeta.has('s1')).toBe(false);
     });
   });

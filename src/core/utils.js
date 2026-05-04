@@ -11,7 +11,17 @@ function atomicWriteSync(filePath, data) {
   })();
   const tmp = filePath + '.tmp';
   fs.writeFileSync(tmp, data);
-  fs.renameSync(tmp, filePath);
+  try {
+    fs.renameSync(tmp, filePath);
+  } catch (e) {
+    // Windows: renameSync fails if target exists, unlink first
+    if (e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'EXDEV') {
+      fs.unlinkSync(filePath);
+      fs.renameSync(tmp, filePath);
+    } else {
+      throw e;
+    }
+  }
 }
 
 function safeLoadJson(filePath) {

@@ -86,12 +86,10 @@ class ContextManager {
       }
     } catch {}
 
+    // Cross-platform directory listing without shell injection risk
     try {
-      const listing = execSync(
-        process.platform === 'win32' ? 'dir /b' : 'ls -la',
-        { cwd: workspace }
-      ).toString().trim();
-      parts.push(`工作目录内容:\n${listing}`);
+      const entries = fs.readdirSync(workspace);
+      parts.push(`工作目录内容:\n${entries.join('\n')}`);
     } catch {}
 
     return parts.join('\n\n');

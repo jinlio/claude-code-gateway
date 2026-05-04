@@ -32,8 +32,9 @@ class ApprovalRules {
         if (hasBackReference(rule.command_pattern)) {
           throw new Error(`Rule regex has back references: ${rule.command_pattern}`);
         }
-        try { new RegExp(rule.command_pattern); }
-        catch (e) { throw new Error(`Rule regex compilation failed: ${e.message}`); }
+        try {
+          rule._compiledRegex = new RegExp(rule.command_pattern);
+        } catch (e) { throw new Error(`Rule regex compilation failed: ${e.message}`); }
       }
     }
     return raw.rules;
@@ -44,8 +45,7 @@ class ApprovalRules {
       if (rule.tool !== toolName && rule.tool !== '*') continue;
 
       if (rule.command_pattern && context.command) {
-        const regex = new RegExp(rule.command_pattern);
-        if (!regex.test(context.command)) continue;
+        if (!rule._compiledRegex.test(context.command)) continue;
       }
 
       if (rule.path_pattern && context.filePath) {

@@ -213,8 +213,8 @@ describe('Revert + Context — end-to-end integration', () => {
 
   (hasGit ? describe : describe.skip)('cleanupOldStashes integration', () => {
     it('drops old inactive stashes but keeps active ones', () => {
-      const activeSessionId = 'active-session';
-      const inactiveSessionId = 'inactive-session';
+      const activeSessionId = 'cc-1709000000-act1111';
+      const inactiveSessionId = 'cc-1709000000-ina2222';
 
       bridge.sessionMeta.set(activeSessionId, { cwd: tmpDir, active: true, stashRef: null, senderId: 'u1' });
 
@@ -237,9 +237,9 @@ describe('Revert + Context — end-to-end integration', () => {
 
       const stashList = execSync('git stash list', { cwd: tmpDir }).toString();
       // Active session's stash should be preserved
-      expect(stashList).toContain('active-session');
+      expect(stashList).toContain('act1111');
       // Old inactive stash should be dropped
-      expect(stashList).not.toContain('inactive-session');
+      expect(stashList).not.toContain('ina2222');
     });
   });
 

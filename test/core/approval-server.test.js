@@ -110,6 +110,34 @@ describe('ApprovalServer', () => {
       const statusRes = await fetchUrl(`${baseUrl}/api/approval/status?id=${approvalId}`);
       expect(JSON.parse(statusRes.body).status).toBe('DENIED');
     });
+
+    it('returns 403 when shared secret is configured and wrong auth header is provided', async () => {
+      // Stop default server and create one with shared secret
+      server.stop();
+      const secretServer = new ApprovalServer(tmpDir, 0, null, null, 'efficient', 'my-secret-key');
+      const secretPort = await secretServer.start();
+      const secretBaseUrl = `http://127.0.0.1:${secretPort}`;
+
+      const createRes = await fetchUrl(`${secretBaseUrl}/api/approval/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 's1', toolName: 'Bash', toolInput: '{}', cwd: '/ws', timestamp: Date.now() })
+      });
+      const { approvalId } = JSON.parse(createRes.body);
+
+      // Without auth header — should be forbidden
+      const badRes = await fetchUrl(`${secretBaseUrl}/api/approval/respond?id=${approvalId}&action=approve`, { method: 'POST' });
+      expect(badRes.statusCode).toBe(403);
+
+      // With correct auth header — should succeed
+      const goodRes = await fetchUrl(`${secretBaseUrl}/api/approval/respond?id=${approvalId}&action=approve`, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer my-secret-key' }
+      });
+      expect(goodRes.statusCode).toBe(200);
+
+      secretServer.stop();
+    });
   });
 
   describe('404 for unknown routes', () => {

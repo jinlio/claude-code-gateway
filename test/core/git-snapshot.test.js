@@ -30,7 +30,7 @@ describe('GitSnapshot', () => {
     execSync('git commit -m "initial"', { cwd: tmpDir, stdio: 'ignore' });
 
     bridge = new ClaudeBridge();
-    sessionId = 'test-session-1';
+    sessionId = 'cc-1709000000-abc123';
     bridge.sessionMeta.set(sessionId, { cwd: tmpDir, active: true, stashRef: null });
   });
 
@@ -183,16 +183,17 @@ describe('GitSnapshot', () => {
       // Create a stash with an old timestamp for an inactive session
       fs.writeFileSync(path.join(tmpDir, 'old-file.txt'), 'old content');
       const oldTimestamp = Date.now() - 8 * 24 * 3600000; // 8 days old
-      const oldStashRef = `CC-snapshot-inactive-session-${oldTimestamp}`;
+      const inactiveSessionId = 'cc-1709000000-xyz789';
+      const oldStashRef = `CC-snapshot-${inactiveSessionId}-${oldTimestamp}`;
       execSync(`git stash push -u -m "${oldStashRef}"`, { cwd: tmpDir, stdio: 'ignore' });
 
       // Set session as inactive
-      bridge.sessionMeta.set('inactive-session', { cwd: tmpDir, active: false, stashRef: oldStashRef });
+      bridge.sessionMeta.set(inactiveSessionId, { cwd: tmpDir, active: false, stashRef: oldStashRef });
 
       GitSnapshot.cleanupOldStashes(bridge, tmpDir);
 
       const stashList = execSync('git stash list', { cwd: tmpDir }).toString();
-      expect(stashList).not.toContain('inactive-session');
+      expect(stashList).not.toContain('xyz789');
     });
 
     it('handles empty stash list gracefully', () => {

@@ -11,14 +11,25 @@ CWD="$(pwd)"
 TIMESTAMP="$(date +%s)"
 
 # Phase 1: Create approval request
+# Use jq for safe JSON construction (prevents injection)
+if command -v jq &>/dev/null; then
+  BODY=$(jq -n --arg sid "$SESSION_ID" --arg tn "$TOOL_NAME" \
+    --arg ti "$TOOL_INPUT" --arg cwd "$CWD" --arg ts "$TIMESTAMP" \
+    '{sessionId:$sid, toolName:$tn, toolInput:$ti, cwd:$cwd, timestamp:$ts}')
+else
+  # Fallback: basic JSON with minimal escaping
+  ESCAPED_INPUT=$(echo "$TOOL_INPUT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
+  BODY="{\"sessionId\":\"${SESSION_ID}\",\"toolName\":\"${TOOL_NAME}\",\"toolInput\":\"${ESCAPED_INPUT}\",\"cwd\":\"${CWD}\",\"timestamp\":\"${TIMESTAMP}\"}"
+fi
+
 RESPONSE=$(curl -s -f -X POST "${BRIDGE_URL}/api/approval/request" \
   -H "Content-Type: application/json" \
-  -d "{\"sessionId\":\"${SESSION_ID}\",\"toolName\":\"${TOOL_NAME}\",\"toolInput\":\"${TOOL_INPUT}\",\"cwd\":\"${CWD}\",\"timestamp\":\"${TIMESTAMP}\"}" \
+  -d "$BODY" \
   --connect-timeout 5 --max-time 10 2>/dev/null)
 
 if [ $? -ne 0 ] || [ -z "$RESPONSE" ]; then
-  echo "[cc-bridge] Approval service unreachable, auto-approve" >&2
-  exit 0
+  echo "[cc-bridge] Approval service unreachable, denying" >&2
+  exit 2
 fi
 
 # Check for auto-approved response (rule-based pre-check)
@@ -30,8 +41,8 @@ fi
 
 APPROVAL_ID=$(echo "$RESPONSE" | jq -r '.approvalId // empty' 2>/dev/null)
 if [ -z "$APPROVAL_ID" ]; then
-  echo "[cc-bridge] No approval ID obtained, auto-approve" >&2
-  exit 0
+  echo "[cc-bridge] No approval ID obtained, denying" >&2
+  exit 2
 fi
 
 # Phase 2: Poll approval status

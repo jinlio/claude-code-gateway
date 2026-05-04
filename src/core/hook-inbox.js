@@ -17,9 +17,9 @@ class HookInbox {
       ? path.join(__dirname, '../../scripts/cc-bridge-approval-hook.mjs')
       : path.join(__dirname, '../../scripts/cc-bridge-approval-hook.sh');
 
-    // Build the command — on Windows use node explicitly
+    // Build the command — on Windows use node explicitly, quote paths for spaces
     const commandPrefix = process.platform === 'win32' ? 'node ' : '';
-    const hookCommand = `${commandPrefix}${hookScriptPath}`;
+    const hookCommand = `${commandPrefix}"${hookScriptPath}"`;
 
     const newConfig = {
       hooks: {

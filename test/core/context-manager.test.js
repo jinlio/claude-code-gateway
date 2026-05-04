@@ -129,30 +129,29 @@ describe('ContextManager', () => {
       expect(prompt).toContain('工作目录内容:');
     });
 
-    it('returns partial context when some commands fail', () => {
+    it('returns partial context when git commands fail but directory listing succeeds', () => {
       const { execSync } = require('child_process');
       execSync.mockImplementation(() => { throw new Error('fail'); });
       const prompt = cm.buildContextPrompt(tmpDir);
-      expect(prompt).toBe('');
+      // fs.readdirSync still works even when git commands fail
+      expect(prompt).toContain('工作目录内容:');
     });
 
-    it('uses platform-appropriate directory listing command', () => {
+    it('uses fs.readdirSync for directory listing (not execSync)', () => {
       const { execSync } = require('child_process');
       execSync.mockClear();
       execSync.mockImplementation((cmd) => {
         if (cmd.includes('git branch')) return 'main\n';
         if (cmd.includes('git diff')) return 'src/file.js\n';
-        if (cmd.includes('ls -la') || cmd.includes('dir /b')) return 'file1\n';
         throw new Error('unknown');
       });
 
-      cm.buildContextPrompt(tmpDir);
-
-      const listingCmd = process.platform === 'win32' ? 'dir /b' : 'ls -la';
-      expect(execSync).toHaveBeenCalledWith(
-        expect.stringContaining(listingCmd),
-        expect.any(Object)
-      );
+      const prompt = cm.buildContextPrompt(tmpDir);
+      // Directory listing comes from fs.readdirSync, not execSync
+      expect(prompt).toContain('工作目录内容:');
+      // Should NOT call execSync with dir/ls commands
+      const calls = execSync.mock.calls.map(c => c[0]);
+      expect(calls.some(c => c.includes('dir /b') || c.includes('ls -la'))).toBe(false);
     });
   });
 });

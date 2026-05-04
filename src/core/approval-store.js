@@ -12,6 +12,7 @@ class ApprovalStore {
     this.filePath = path.join(dataDir, 'approval-requests.json');
     this.requests = new Map();
     this._timedOutOnLoad = 0;
+    this._load();
   }
 
   _load() {
@@ -63,10 +64,13 @@ class ApprovalStore {
   }
 
   findByShortId(shortId) {
+    const matches = [];
     for (const [id, item] of this.requests) {
-      if (id.startsWith(shortId)) return item;
+      if (id.startsWith(shortId)) matches.push(item);
     }
-    return null;
+    if (matches.length === 0) return null;
+    if (matches.length > 1) return { ambiguous: true, matches };
+    return matches[0];
   }
 
   findBySessionId(sessionId) {

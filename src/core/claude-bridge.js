@@ -4,14 +4,16 @@
 const { spawn } = require('child_process');
 const { acquireWorkspaceLock, releaseWorkspaceLock } = require('./utils');
 
-const HEARTBEAT_INTERVAL = 60000;  // 60s
-const SESSION_TIMEOUT = 1800000;   // 30min
+const DEFAULT_HEARTBEAT_INTERVAL = 60000;  // 60s
+const DEFAULT_SESSION_TIMEOUT = 1800000;   // 30min
 
 class ClaudeBridge {
-  constructor() {
+  constructor(options = {}) {
     this.processMap = new Map();  // sessionId → ChildProcess
     this.sessionMeta = new Map(); // sessionId → metadata object
     this._heartbeatTimer = null;
+    this._heartbeatInterval = options.heartbeatInterval || DEFAULT_HEARTBEAT_INTERVAL;
+    this._sessionTimeout = options.sessionTimeout || DEFAULT_SESSION_TIMEOUT;
   }
 
   findActiveSession(senderId) {
@@ -24,11 +26,21 @@ class ClaudeBridge {
   checkSessionAlive(sessionId) {
     const proc = this.processMap.get(sessionId);
     if (!proc) {
+      const meta = this.sessionMeta.get(sessionId);
+      if (meta?.lockRelease) {
+        releaseWorkspaceLock(meta.lockRelease).catch(() => {});
+        meta.lockRelease = null;
+      }
       this.sessionMeta.delete(sessionId);
       return { alive: false };
     }
     if (proc.exitCode !== null) {
       this.processMap.delete(sessionId);
+      const meta = this.sessionMeta.get(sessionId);
+      if (meta?.lockRelease) {
+        releaseWorkspaceLock(meta.lockRelease).catch(() => {});
+        meta.lockRelease = null;
+      }
       this.sessionMeta.delete(sessionId);
       return { alive: false };
     }
@@ -113,7 +125,9 @@ class ClaudeBridge {
     if (this._heartbeatTimer) return;
 
     this._heartbeatTimer = setInterval(() => {
-      for (const [sid, meta] of this.sessionMeta) {
+      // Iterate a snapshot to avoid concurrent modification from terminateSession
+      const entries = [...this.sessionMeta.entries()];
+      for (const [sid, meta] of entries) {
         const alive = this.checkSessionAlive(sid);
         if (!alive.alive) {
           this.terminateSession(sid);
@@ -121,7 +135,7 @@ class ClaudeBridge {
         }
 
         const lastActive = new Date(meta.lastActiveAt).getTime();
-        if (Date.now() - lastActive > SESSION_TIMEOUT) {
+        if (Date.now() - lastActive > this._sessionTimeout) {
           this.terminateSession(sid);
         }
       }
@@ -131,7 +145,7 @@ class ClaudeBridge {
       if (!hasActive) {
         this.stopHeartbeat();
       }
-    }, HEARTBEAT_INTERVAL);
+    }, this._heartbeatInterval);
   }
 
   stopHeartbeat() {
@@ -150,4 +164,4 @@ class ClaudeBridge {
   }
 }
 
-module.exports = { ClaudeBridge, HEARTBEAT_INTERVAL, SESSION_TIMEOUT };
+module.exports = { ClaudeBridge, DEFAULT_HEARTBEAT_INTERVAL, DEFAULT_SESSION_TIMEOUT };

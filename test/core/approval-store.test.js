@@ -68,6 +68,16 @@ describe('ApprovalStore', () => {
       store.create({ sessionId: 's1', toolName: 'Bash', toolInput: '{}', cwd: '/ws' });
       expect(store.findByShortId('zzzzzzzz')).toBeNull();
     });
+
+    it('returns ambiguous result when shortId matches multiple items', () => {
+      const id1 = store.create({ sessionId: 's1', toolName: 'Bash', toolInput: '{}', cwd: '/ws' });
+      const id2 = store.create({ sessionId: 's2', toolName: 'Write', toolInput: '{}', cwd: '/ws' });
+      // Both are UUIDs, use a very short prefix that could match both
+      // Since UUIDs are random, use the common prefix approach: use single char
+      const result = store.findByShortId('');
+      expect(result.ambiguous).toBe(true);
+      expect(result.matches.length).toBe(2);
+    });
   });
 
   describe('resolve', () => {
