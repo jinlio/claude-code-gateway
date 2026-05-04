@@ -1,0 +1,51 @@
+# cc-approval-rules.yml
+# Default efficient mode: Write/Edit auto-approve, only Bash requires approval
+rules:
+  # === File edits — auto-approve ===
+  - tool: Write
+    action: auto_approve
+
+  - tool: Edit
+    action: auto_approve
+
+  # === Safe commands — auto-approve ===
+  - tool: Bash
+    command_pattern: "^npm test$"
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^git status$"
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^git commit"
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^git (add|diff|log|branch|stash)"
+    action: auto_approve
+
+  # === minimatch path matching ===
+  - tool: Write
+    path_pattern: "src/**/*.md"
+    action: auto_approve
+
+  # === Destructive commands — require approval ===
+  - tool: Bash
+    command_pattern: "^rm\\s+-rf\\s+.*"
+    action: require_approval
+    sensitive: true
+
+  - tool: Bash
+    command_pattern: "^sudo\\s+.*"
+    action: require_approval
+    sensitive: true
+
+  - tool: Bash
+    command_pattern: "^npm (publish|run build:prod)"
+    action: require_approval
+    sensitive: true
+
+  # === Default strategy ===
+  - tool: "*"
+    action: require_approval
