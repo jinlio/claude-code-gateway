@@ -6,40 +6,56 @@ const { FeishuMessenger, MAX_MESSAGE_LENGTH } = require('../../src/core/feishu-m
 describe('FeishuMessenger', () => {
   let messenger;
   let sentMessages;
+  let mockSendText;
 
   beforeEach(() => {
     sentMessages = [];
+    mockSendText = jest.fn().mockImplementation(async (ctx) => {
+      sentMessages.push({ to: ctx.to, text: ctx.text, accountId: ctx.accountId });
+    });
     const api = {
-      sendMessage: (msg) => { sentMessages.push(msg); }
+      config: {},
+      runtime: {
+        channel: {
+          outbound: {
+            loadAdapter: jest.fn().mockResolvedValue({ sendText: mockSendText })
+          }
+        }
+      }
     };
     messenger = new FeishuMessenger(api, { maxMessageLength: 100 });
   });
 
   describe('sendToUser', () => {
-    test('sends short message in one chunk', () => {
-      const count = messenger.sendToUser('user1', 'hello');
+    test('sends short message in one chunk', async () => {
+      const count = await messenger.sendToUser('user1', 'hello');
       expect(count).toBe(1);
       expect(sentMessages).toHaveLength(1);
-      expect(sentMessages[0]).toEqual({ channel: 'feishu', target: 'user1', text: 'hello' });
+      expect(sentMessages[0]).toEqual({ to: 'user1', text: 'hello', accountId: undefined });
     });
 
-    test('sends empty message', () => {
-      const count = messenger.sendToUser('user1', '');
+    test('sends empty message', async () => {
+      const count = await messenger.sendToUser('user1', '');
       expect(count).toBe(1);
       expect(sentMessages[0].text).toBe('');
     });
 
-    test('sends null message as empty string', () => {
-      const count = messenger.sendToUser('user1', null);
+    test('sends null message as empty string', async () => {
+      const count = await messenger.sendToUser('user1', null);
       expect(count).toBe(1);
       expect(sentMessages[0].text).toBe('');
     });
 
-    test('splits long message into multiple chunks', () => {
+    test('splits long message into multiple chunks', async () => {
       const longText = 'a'.repeat(250);
-      const count = messenger.sendToUser('user1', longText);
+      const count = await messenger.sendToUser('user1', longText);
       expect(count).toBe(3);
       expect(sentMessages).toHaveLength(3);
+    });
+
+    test('passes channelId and accountId options', async () => {
+      await messenger.sendToUser('user1', 'hello', { channelId: 'feishu', accountId: 'acct1' });
+      expect(sentMessages[0].accountId).toBe('acct1');
     });
   });
 

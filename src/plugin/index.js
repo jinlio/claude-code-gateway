@@ -1,6 +1,5 @@
 // Plugin entry point — command registration, session orchestration, message forwarding
-// See: cc-bridge-v3-final-plan.md Sections 3, 7, 8
-// OpenClaw plugin spec: definePluginEntry pattern, api.registerCommand, api.on lifecycle
+// OpenClaw plugin spec: definePluginEntry, api.registerCommand, api.on lifecycle
 
 const path = require('path');
 const { ClaudeBridge } = require('../core/claude-bridge');
@@ -23,6 +22,10 @@ let messenger;
 let commandParser;
 let currentMode = 'efficient';
 let pluginConfig = {};
+
+// Per-session routing context from the command that started the session
+// Maps sessionId → { channel, from, to, accountId }
+let sessionRoutes = new Map();
 
 function init(api, config) {
   pluginConfig = config || api?.pluginConfig || {};
@@ -64,7 +67,11 @@ async function startServices(dataDir) {
     if (info.type === 'restart_timeout') {
       for (const [sid, meta] of bridge.sessionMeta) {
         if (meta.active) {
-          messenger.sendToUser(meta.senderId, info.text);
+          const route = sessionRoutes.get(sid);
+          messenger.sendToUser(route?.to || meta.senderId, info.text, {
+            channelId: route?.channel,
+            accountId: route?.accountId
+          });
         }
       }
     }
@@ -73,11 +80,14 @@ async function startServices(dataDir) {
   approvalServer = new ApprovalServer(dataDir, pluginConfig.approvalServerPort || 0, notifyCallback, approvalRules, currentMode, pluginConfig.sharedSecret || null);
   approvalServer.onApprovalNeeded = (id, params) => {
     const inputPreview = formatToolInput(params.toolName, params.toolInput);
-    // Look up senderId directly from sessionMeta by sessionId (not senderId)
     const meta = bridge.sessionMeta.get(params.sessionId);
-    const senderId = meta?.senderId || params.sessionId;
+    const route = sessionRoutes.get(params.sessionId);
+    const target = route?.to || meta?.senderId || params.sessionId;
     const notification = messenger.formatApprovalNotification(id, params.toolName, inputPreview, params.cwd);
-    messenger.sendToUser(senderId, notification);
+    messenger.sendToUser(target, notification, {
+      channelId: route?.channel,
+      accountId: route?.accountId
+    });
   };
 
   const port = await approvalServer.start();
@@ -119,7 +129,18 @@ function handleIncomingMessage(senderId, workspace, text) {
   return parsed;
 }
 
-function setupProcessForwarding(proc, sessionId, senderId) {
+function storeSessionRoute(sessionId, ctx) {
+  sessionRoutes.set(sessionId, {
+    channel: ctx.channel,
+    from: ctx.from,
+    to: ctx.to || ctx.from,
+    accountId: ctx.accountId
+  });
+}
+
+function setupProcessForwarding(proc, sessionId) {
+  const route = sessionRoutes.get(sessionId);
+  const target = route?.to;
   let outputBuffer = '';
 
   proc.stdout.on('data', (chunk) => {
@@ -131,29 +152,43 @@ function setupProcessForwarding(proc, sessionId, senderId) {
     if (lines.length > 1) {
       outputBuffer = lines.pop();
       const completeLines = lines.join('\n');
-      if (completeLines.trim()) {
-        messenger.sendToUser(senderId, completeLines);
+      if (completeLines.trim() && target) {
+        messenger.sendToUser(target, completeLines, {
+          channelId: route?.channel,
+          accountId: route?.accountId
+        });
       }
     }
   });
 
   proc.stderr.on('data', (chunk) => {
     const text = chunk.toString().trim();
-    if (text) {
-      messenger.sendToUser(senderId, messenger.formatErrorMessage(text));
+    if (text && target) {
+      messenger.sendToUser(target, messenger.formatErrorMessage(text), {
+        channelId: route?.channel,
+        accountId: route?.accountId
+      });
     }
   });
 
   proc.on('exit', (code) => {
     // Flush remaining buffer
-    if (outputBuffer.trim()) {
-      messenger.sendToUser(senderId, outputBuffer.trim());
+    if (outputBuffer.trim() && target) {
+      messenger.sendToUser(target, outputBuffer.trim(), {
+        channelId: route?.channel,
+        accountId: route?.accountId
+      });
       outputBuffer = '';
     }
 
-    if (code !== 0 && code !== null) {
-      messenger.sendToUser(senderId, `会话进程退出 (code: ${code})`);
+    if (code !== 0 && code !== null && target) {
+      messenger.sendToUser(target, `会话进程退出 (code: ${code})`, {
+        channelId: route?.channel,
+        accountId: route?.accountId
+      });
     }
+
+    sessionRoutes.delete(sessionId);
   });
 }
 
@@ -169,7 +204,7 @@ function registerCommands(api) {
       }
 
       const senderId = ctx.senderId;
-      const workspace = ctx.workspace;
+      const workspace = ctx.workspace || process.cwd();
 
       // If there's an active persistent session, send to it
       const existingSessionId = bridge.findActiveSession(senderId);
@@ -184,9 +219,10 @@ function registerCommands(api) {
 
       // Create a one-shot session
       const { sessionId } = await bridge.spawnSession(senderId, workspace, prompt);
+      storeSessionRoute(sessionId, ctx);
       const proc = bridge.processMap.get(sessionId);
       if (proc) {
-        setupProcessForwarding(proc, sessionId, senderId);
+        setupProcessForwarding(proc, sessionId);
       }
 
       return { text: `任务已提交 (ID: ${sessionId.slice(0, 8)})` };
@@ -199,7 +235,7 @@ function registerCommands(api) {
     description: '启动持久会话',
     handler: async (ctx) => {
       const senderId = ctx.senderId;
-      const workspace = ctx.workspace;
+      const workspace = ctx.workspace || process.cwd();
 
       const existing = bridge.findActiveSession(senderId);
       if (existing) {
@@ -209,11 +245,12 @@ function registerCommands(api) {
       }
 
       const { sessionId } = await bridge.spawnSession(senderId, workspace, '');
+      storeSessionRoute(sessionId, ctx);
       sessionManager.activate(senderId, workspace, sessionId);
 
       const proc = bridge.processMap.get(sessionId);
       if (proc) {
-        setupProcessForwarding(proc, sessionId, senderId);
+        setupProcessForwarding(proc, sessionId);
       }
 
       // Clean orphaned rules from previous sessions
@@ -256,7 +293,6 @@ function registerCommands(api) {
         return { text: '当前没有持久会话。' };
       }
 
-      // Check permission: only the session owner can stop it
       const meta = bridge.sessionMeta.get(sessionId);
       if (meta.senderId !== ctx.senderId) {
         return { text: '无权停止该会话，只有会话创建者可以停止。' };
@@ -264,6 +300,7 @@ function registerCommands(api) {
 
       bridge.terminateSession(sessionId);
       sessionManager.deactivate(senderId);
+      sessionRoutes.delete(sessionId);
 
       // Drop git snapshot if exists
       const snapshot = new GitSnapshot(bridge, sessionId);
@@ -316,7 +353,6 @@ function registerCommands(api) {
         return { text: '没有活跃会话。' };
       }
 
-      // Forward answer to the Claude process stdin
       const proc = bridge.processMap.get(sessionId);
       if (proc && proc.exitCode === null) {
         proc.stdin.write(answer + '\n');

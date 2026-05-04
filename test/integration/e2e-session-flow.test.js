@@ -29,7 +29,18 @@ describe('E2E: Command parsing + Approval flow + Messenger formatting', () => {
 
     sentMessages = [];
     const mockApi = {
-      sendMessage: (msg) => { sentMessages.push(msg); }
+      config: {},
+      runtime: {
+        channel: {
+          outbound: {
+            loadAdapter: jest.fn().mockResolvedValue({
+              sendText: jest.fn().mockImplementation(async (ctx) => {
+                sentMessages.push({ to: ctx.to, text: ctx.text });
+              })
+            })
+          }
+        }
+      }
     };
 
     messenger = new FeishuMessenger(mockApi, { maxMessageLength: 4000 });
@@ -89,9 +100,9 @@ describe('E2E: Command parsing + Approval flow + Messenger formatting', () => {
       expect(notification).toContain('rm -rf /tmp/test');
 
       // 4. Messenger sends the notification
-      messenger.sendToUser('user1', notification);
+      await messenger.sendToUser('user1', notification);
       expect(sentMessages.length).toBe(1);
-      expect(sentMessages[0].target).toBe('user1');
+      expect(sentMessages[0].to).toBe('user1');
 
       // 5. User approves via parsed command
       const shortId = requestResult.approvalId.slice(0, 8);
@@ -171,9 +182,9 @@ describe('E2E: Command parsing + Approval flow + Messenger formatting', () => {
   });
 
   describe('Message formatting and splitting', () => {
-    test('long Claude output is split and sent in chunks', () => {
+    test('long Claude output is split and sent in chunks', async () => {
       const longOutput = 'line\n'.repeat(1000);
-      const count = messenger.sendToUser('user1', longOutput);
+      const count = await messenger.sendToUser('user1', longOutput);
       expect(count).toBeGreaterThan(1);
 
       const rejoined = sentMessages.map(m => m.text).join('');
@@ -302,7 +313,19 @@ describe('E2E: Command parsing + Approval flow + Messenger formatting', () => {
       const rules = new ApprovalRules(rulesPath);
 
       const restartMessages = [];
-      const restartApi = { sendMessage: (msg) => { restartMessages.push(msg); } };
+      const restartSendText = jest.fn().mockImplementation(async (ctx) => {
+        restartMessages.push({ to: ctx.to, text: ctx.text });
+      });
+      const restartApi = {
+        config: {},
+        runtime: {
+          channel: {
+            outbound: {
+              loadAdapter: jest.fn().mockResolvedValue({ sendText: restartSendText })
+            }
+          }
+        }
+      };
       const restartMessenger = new FeishuMessenger(restartApi, { maxMessageLength: 4000 });
       const newNotifyCallback = (info) => {
         restartMessenger.sendToUser('user1', info.text);

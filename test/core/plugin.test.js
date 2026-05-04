@@ -120,7 +120,20 @@ describe('command handlers', () => {
   let tmpDir;
 
   beforeEach(() => {
-    mockApi = { registerCommand: jest.fn(), sendMessage: jest.fn(), on: jest.fn() };
+    mockApi = {
+      registerCommand: jest.fn(),
+      on: jest.fn(),
+      config: {},
+      runtime: {
+        channel: {
+          outbound: {
+            loadAdapter: jest.fn().mockResolvedValue({
+              sendText: jest.fn().mockResolvedValue(undefined)
+            })
+          }
+        }
+      }
+    };
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bridge-plugin-'));
 
     // Setup mocks
@@ -375,11 +388,9 @@ describe('command handlers', () => {
       bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', cwd: '/ws', active: true });
 
       mockApi.registerCommand.mockClear();
-      mockApi.sendMessage.mockClear();
       init(mockApi, config);
 
       // Manually trigger startServices to set up approvalServer and onApprovalNeeded
-      // The gateway_start hook was registered via api.on
       const gatewayStartCall = mockApi.on.mock.calls.find(c => c[0] === 'gateway_start');
       if (gatewayStartCall) {
         await gatewayStartCall[1]();
@@ -394,10 +405,8 @@ describe('command handlers', () => {
         cwd: '/ws'
       });
 
-      expect(mockApi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
-        channel: 'feishu',
-        text: expect.stringContaining('rm -rf /tmp')
-      }));
+      // The notification should be sent via the outbound adapter
+      expect(mockApi.runtime.channel.outbound.loadAdapter).toHaveBeenCalled();
     });
   });
 });

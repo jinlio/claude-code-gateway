@@ -1,5 +1,5 @@
 // FeishuMessenger — bidirectional message forwarding with formatting
-// See: cc-bridge-v3-final-plan.md Section 7.2, 7.3
+// Uses OpenClaw's outbound adapter (api.runtime.channel.outbound.loadAdapter) for async delivery
 
 const MAX_MESSAGE_LENGTH = 4000;
 const CODE_BLOCK_MARKER = '```';
@@ -8,15 +8,32 @@ class FeishuMessenger {
   constructor(api, options = {}) {
     this.api = api;
     this.maxMessageLength = options.maxMessageLength || MAX_MESSAGE_LENGTH;
+    this._outboundCache = null;
+    this._outboundChannelId = null;
   }
 
-  sendToUser(target, text) {
+  // Cache the outbound adapter for the feishu channel
+  async _getOutbound(channelId = 'feishu') {
+    if (!this._outboundCache || this._outboundChannelId !== channelId) {
+      this._outboundCache = await this.api.runtime.channel.outbound.loadAdapter(channelId);
+      this._outboundChannelId = channelId;
+    }
+    return this._outboundCache;
+  }
+
+  // Send a text message to a user/chat via the feishu outbound adapter
+  async sendToUser(target, text, options = {}) {
     const chunks = this.splitMessage(text);
+    const outbound = await this._getOutbound(options.channelId);
+    if (!outbound?.sendText) return 0;
+
     for (const chunk of chunks) {
-      this.api.sendMessage({
-        channel: 'feishu',
-        target,
-        text: chunk
+      await outbound.sendText({
+        cfg: this.api.config,
+        to: target,
+        text: chunk,
+        accountId: options.accountId,
+        threadId: options.threadId
       });
     }
     return chunks.length;
@@ -88,7 +105,7 @@ class FeishuMessenger {
       }
 
       let splitAt = this.findSplitPoint(remaining, this.maxMessageLength);
-      splitAt = Math.max(splitAt, 1); // Prevent infinite loop when splitAt is 0
+      splitAt = Math.max(splitAt, 1);
 
       // Preserve code blocks across splits
       const beforeSplit = remaining.slice(0, splitAt);
