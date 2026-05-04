@@ -12,3 +12,6 @@ coverage/
 .vscode/
 *.swp
 *.swo
+package-lock.json
+.claude/
+data/

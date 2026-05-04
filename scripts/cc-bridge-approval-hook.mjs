@@ -29,8 +29,14 @@ async function requestApproval() {
   }
 
   const data = await res.json();
-  if (!data.approvalId) {
+
+  // Auto-approved by rules — exit immediately
+  if (data.status === 'APPROVED' && data.autoApproved) {
     process.exit(0);
+  }
+
+  if (!data.approvalId) {
+    process.exit(0);  // No approval ID obtained, auto-approve
   }
 
   // Phase 2: Poll approval status

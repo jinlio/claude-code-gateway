@@ -16,7 +16,8 @@
     "wecom",
     "approval",
     "gateway",
-    "bridge"
+    "bridge",
+    "openclaw"
   ],
   "author": "jinlio",
   "license": "MIT",
@@ -31,5 +32,11 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "openclaw": {
+    "extensions": ["./src/plugin/index.js"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2"
+    }
   }
 }

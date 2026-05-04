@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const yaml = require('js-yaml');
-const minimatch = require('minimatch');
+const { minimatch } = require('minimatch');
 
 function hasNestedQuantifiers(pattern) {
   const groupQuantifier = /\([^)]*[+*{][^)]*\)[+*{]/;

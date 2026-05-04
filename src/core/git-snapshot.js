@@ -42,22 +42,58 @@ class GitSnapshot {
         return { success: false, message: 'Snapshot manually deleted or missing' };
       }
 
+      // Discard current working tree changes before applying stash
+      // This is expected: revert means "throw away everything since snapshot"
+      try { execSync('git checkout -- .', { cwd: meta.cwd, stdio: 'ignore' }); } catch {}
+      try { execSync('git clean -fd', { cwd: meta.cwd, stdio: 'ignore' }); } catch {}
+
       execSync(`git stash apply stash@{${idx}}`, { cwd: meta.cwd });
+
+      // Clear stashRef to prevent duplicate revert
+      meta.stashRef = null;
       return { success: true, message: 'Rolled back to pre-task state' };
     } catch (err) {
       return { success: false, message: `Rollback failed: ${err.message}` };
     }
   }
 
+  dropStash() {
+    const meta = this.bridge.sessionMeta.get(this.sessionId);
+    if (!meta || !meta.stashRef) {
+      return { success: false, message: 'No matching snapshot found' };
+    }
+
+    try {
+      const stashList = execSync('git stash list', { cwd: meta.cwd }).toString();
+      const entries = stashList.split('\n');
+      const idx = entries.findIndex(line => line.includes(meta.stashRef));
+
+      if (idx === -1) {
+        meta.stashRef = null;
+        return { success: false, message: 'Snapshot manually deleted or missing' };
+      }
+
+      execSync(`git stash drop stash@{${idx}}`, { cwd: meta.cwd });
+      meta.stashRef = null;
+      return { success: true, message: 'Snapshot dropped' };
+    } catch (err) {
+      return { success: false, message: `Drop failed: ${err.message}` };
+    }
+  }
+
   static cleanupOldStashes(bridge, cwd) {
     try {
-      const stashList = execSync('git stash list', { cwd }).toString();
+      let stashList = execSync('git stash list', { cwd }).toString();
       const cutoff = Date.now() - 7 * 24 * 3600000;
+      const entries = stashList.split('\n').filter(Boolean);
+      let dropped = 0;
 
-      for (const line of stashList.split('\n')) {
+      // Iterate in reverse to avoid index shift after drops
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const line = entries[i];
         if (!line.includes('CC-snapshot-')) continue;
 
-        const sessionIdMatch = line.match(/CC-snapshot-(\w+)-(\d+)/);
+        const sessionIdMatch = line.match(/CC-snapshot-(.+)-(\d+)/);
         if (!sessionIdMatch) continue;
 
         const sessionId = sessionIdMatch[1];
@@ -68,8 +104,11 @@ class GitSnapshot {
         if (meta && meta.active) continue;
 
         if (timestamp < cutoff) {
-          const idx = stashList.split('\n').indexOf(line);
-          execSync(`git stash drop stash@{${idx}}`, { cwd });
+          const actualIdx = i - dropped;
+          try {
+            execSync(`git stash drop stash@{${actualIdx}}`, { cwd });
+            dropped++;
+          } catch {}
         }
       }
     } catch {}

@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { atomicWriteSync } = require('./utils');
 
 const RULES_START = '<!-- CC-BRIDGE-RULES:START -->';
 const RULES_END = '<!-- CC-BRIDGE-RULES:END -->';
@@ -34,7 +35,7 @@ class ContextManager {
     const injected = `${RULES_START}\n${this.rulesContent}\n${RULES_END}`;
     content += `\n\n${injected}`;
 
-    fs.writeFileSync(this.claudeMdPath, content);
+    atomicWriteSync(this.claudeMdPath, content);
   }
 
   cleanOrphanedRules(bridge) {
@@ -49,7 +50,7 @@ class ContextManager {
 
     if (!hasActiveSession) {
       const cleaned = this.removeInjectedRules(content);
-      fs.writeFileSync(this.claudeMdPath, cleaned);
+      atomicWriteSync(this.claudeMdPath, cleaned);
       return true;
     }
     return false;
@@ -67,7 +68,7 @@ class ContextManager {
     if (!fs.existsSync(this.claudeMdPath)) return;
     const content = fs.readFileSync(this.claudeMdPath, 'utf8');
     const cleaned = this.removeInjectedRules(content);
-    fs.writeFileSync(this.claudeMdPath, cleaned);
+    atomicWriteSync(this.claudeMdPath, cleaned);
   }
 
   buildContextPrompt(workspace) {
@@ -86,7 +87,10 @@ class ContextManager {
     } catch {}
 
     try {
-      const listing = execSync('ls -la', { cwd: workspace }).toString().trim();
+      const listing = execSync(
+        process.platform === 'win32' ? 'dir /b' : 'ls -la',
+        { cwd: workspace }
+      ).toString().trim();
       parts.push(`工作目录内容:\n${listing}`);
     } catch {}
 

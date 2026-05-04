@@ -1,9 +1,10 @@
 {
-  "name": "claude-code-gateway",
-  "version": "0.1.0",
-  "description": "Claude Code CLI gateway with approval control, session management, and rollback support for messaging platforms",
-  "entry": "src/plugin/index.js",
+  "id": "claude-code-gateway",
+  "name": "Claude Code Gateway",
+  "description": "A gateway bridge connecting Claude Code CLI to messaging platforms with approval control, session management, and rollback support",
   "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
     "properties": {
       "approvalServerPort": {
         "type": "number",
@@ -11,7 +12,8 @@
       },
       "defaultMode": {
         "type": "string",
-        "description": "默认审批模式：efficient（Edit免审批）或 strict（全部审批），默认 efficient"
+        "description": "默认审批模式：efficient（Edit免审批）或 strict（全部审批），默认 efficient",
+        "enum": ["efficient", "strict"]
       },
       "gitSnapshotEnabled": {
         "type": "boolean",
@@ -28,6 +30,18 @@
       "stashCleanupDays": {
         "type": "number",
         "description": "stash 清理天数阈值，默认 7"
+      },
+      "maxMessageLength": {
+        "type": "number",
+        "description": "飞书单条消息最大长度，默认 4000"
+      },
+      "dataDir": {
+        "type": "string",
+        "description": "数据存储目录，默认 ./data"
+      },
+      "approvalRulesPath": {
+        "type": "string",
+        "description": "审批规则 YAML 文件路径"
       }
     }
   }

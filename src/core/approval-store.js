@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+const { atomicWriteSync } = require('./utils');
+
 class ApprovalStore {
   constructor(dataDir) {
     this.filePath = path.join(dataDir, 'approval-requests.json');
@@ -37,10 +39,8 @@ class ApprovalStore {
   }
 
   _flush() {
-    const tmp = this.filePath + '.tmp';
     const data = JSON.stringify([...this.requests.values()], null, 2);
-    fs.writeFileSync(tmp, data);
-    fs.renameSync(tmp, this.filePath);
+    atomicWriteSync(this.filePath, data);
   }
 
   create(params) {
@@ -67,6 +67,22 @@ class ApprovalStore {
       if (id.startsWith(shortId)) return item;
     }
     return null;
+  }
+
+  findBySessionId(sessionId) {
+    const result = [];
+    for (const item of this.requests.values()) {
+      if (item.sessionId === sessionId) result.push(item);
+    }
+    return result;
+  }
+
+  listPending() {
+    const result = [];
+    for (const item of this.requests.values()) {
+      if (item.status === 'PENDING') result.push(item);
+    }
+    return result;
   }
 
   resolve(id, status) {

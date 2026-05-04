@@ -2,16 +2,21 @@
 // See: cc-bridge-v3-final-plan.md Section 3
 
 const http = require('http');
-const path = require('path');
 const { ApprovalStore } = require('./approval-store');
 
 class ApprovalServer {
-  constructor(dataDir, port = 0, notifyCallback = null) {
+  constructor(dataDir, port = 0, notifyCallback = null, approvalRules = null, currentMode = 'efficient') {
     this.port = port;
     this.dataDir = dataDir;
     this.server = null;
     this.store = new ApprovalStore(dataDir);
     this.notifyCallback = notifyCallback;
+    this.approvalRules = approvalRules;
+    this.currentMode = currentMode;
+  }
+
+  setMode(mode) {
+    this.currentMode = mode;
   }
 
   async start() {
@@ -30,6 +35,30 @@ class ApprovalServer {
           req.on('end', () => {
             try {
               const params = JSON.parse(body);
+
+              // Rule-based pre-check: auto_approve if rules match
+              if (this.approvalRules) {
+                let toolInputParsed = {};
+                try { toolInputParsed = JSON.parse(params.toolInput); } catch {}
+
+                const matchResult = this.approvalRules.match(params.toolName, {
+                  command: toolInputParsed.command,
+                  filePath: toolInputParsed.file_path
+                });
+
+                // In strict mode, override auto_approve for Write/Edit
+                const isStrictOverride = this.currentMode === 'strict' &&
+                  (params.toolName === 'Write' || params.toolName === 'Edit') &&
+                  matchResult.action === 'auto_approve';
+
+                if (matchResult.action === 'auto_approve' && !isStrictOverride) {
+                  res.writeHead(200, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ approvalId: null, status: 'APPROVED', autoApproved: true, sensitive: matchResult.sensitive }));
+                  return;
+                }
+              }
+
+              // require_approval: create PENDING request
               const id = this.store.create(params);
               res.writeHead(200, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ approvalId: id, status: 'PENDING' }));
@@ -48,7 +77,10 @@ class ApprovalServer {
             res.end('NOT FOUND');
           } else {
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ approvalId: id, status: item.status }));
+            res.end(JSON.stringify({
+              approvalId: id,
+              status: item.status
+            }));
           }
 
         } else if (req.method === 'POST' && url.pathname === '/api/approval/respond') {

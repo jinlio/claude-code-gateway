@@ -21,6 +21,13 @@ if [ $? -ne 0 ] || [ -z "$RESPONSE" ]; then
   exit 0
 fi
 
+# Check for auto-approved response (rule-based pre-check)
+STATUS=$(echo "$RESPONSE" | jq -r '.status // "UNKNOWN"')
+AUTO_APPROVED=$(echo "$RESPONSE" | jq -r '.autoApproved // false')
+if [ "$STATUS" = "APPROVED" ] && [ "$AUTO_APPROVED" = "true" ]; then
+  exit 0
+fi
+
 APPROVAL_ID=$(echo "$RESPONSE" | jq -r '.approvalId // empty')
 if [ -z "$APPROVAL_ID" ]; then
   echo "[cc-bridge] No approval ID obtained, auto-approve" >&2
