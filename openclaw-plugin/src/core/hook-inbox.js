@@ -14,8 +14,8 @@ class HookInbox {
     const bridgeUrl = `http://127.0.0.1:${approvalServerPort}`;
 
     const hookScriptPath = process.platform === 'win32'
-      ? path.join(__dirname, '../../scripts/cc-bridge-approval-hook.mjs')
-      : path.join(__dirname, '../../scripts/cc-bridge-approval-hook.sh');
+      ? path.join(__dirname, '../../../shared/hook-scripts/cc-bridge-approval-hook.mjs')
+      : path.join(__dirname, '../../../shared/hook-scripts/cc-bridge-approval-hook.sh');
 
     // Build the command — on Windows use node explicitly, quote paths for spaces
     const commandPrefix = process.platform === 'win32' ? 'node ' : '';

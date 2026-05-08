@@ -1,0 +1,69 @@
+# CC Gateway Approval Rules YAML Schema
+
+Both OpenClaw and Hermes plugins must parse and evaluate rules from this identical YAML format.
+
+## File Format
+
+```yaml
+rules:
+  - tool: Write
+    action: auto_approve
+
+  - tool: Edit
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^npm test$"
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^git status$"
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^rm\\s+-rf\\s+.*"
+    action: require_approval
+    sensitive: true
+
+  - tool: "*"
+    action: require_approval
+```
+
+## Rule Fields
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `tool` | Yes | string | Tool name to match. `*` matches all tools. |
+| `action` | Yes | string | `auto_approve` or `require_approval` |
+| `command_pattern` | No | string | Regex pattern to match against `toolInput.command` (for Bash tool). Max 100 chars. |
+| `path_pattern` | No | string | Glob/minimatch pattern to match against `toolInput.file_path` (for Write/Edit tools). |
+| `sensitive` | No | boolean | Marks the rule as sensitive. Default: false. |
+
+## Matching Semantics
+
+1. Rules are evaluated in order (top to bottom). First matching rule wins.
+2. `tool: "*"` matches any tool name.
+3. `command_pattern` is compiled as a regex and tested against `context.command`.
+4. `path_pattern` uses glob matching (minimatch in Node.js, fnmatch in Python).
+5. If no rule matches, the default action is `require_approval` (fail-closed).
+
+## Regex Safety Constraints
+
+All `command_pattern` values must satisfy:
+
+1. **Length limit**: Max 100 characters. Longer patterns are rejected at load time.
+2. **No nested quantifiers**: Patterns like `(a+)+` or `(a*)*` are rejected (ReDoS prevention).
+3. **No back references**: Patterns containing `\1`, `\2`, etc. are rejected.
+4. **Valid regex**: Patterns must compile without errors. Invalid regex is rejected at load time.
+
+## Strict Mode Override
+
+When approval mode is `strict`:
+- Any rule with `action: auto_approve` for Write or Edit tools is overridden to `require_approval`
+- Bash rules with `action: auto_approve` are NOT overridden (safe commands still auto-approve)
+
+## Platform-Specific Implementation Notes
+
+- **Node.js**: Uses `minimatch` for path_pattern, `RegExp` for command_pattern
+- **Python**: Uses `fnmatch.fnmatch` for path_pattern, `re.compile` for command_pattern
+- Regex semantics differ slightly between platforms; both implementations must handle the same set of safe patterns identically

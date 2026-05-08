@@ -1,0 +1,25 @@
+# CC Gateway Approval Rules
+# See shared/approval-api.md for schema documentation
+
+rules:
+  - tool: Write
+    action: auto_approve
+
+  - tool: Edit
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^npm test$"
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^git status$"
+    action: auto_approve
+
+  - tool: Bash
+    command_pattern: "^rm\\s+-rf\\s+.*"
+    action: require_approval
+    sensitive: true
+
+  - tool: "*"
+    action: require_approval

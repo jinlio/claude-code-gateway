@@ -1,0 +1,35 @@
+name: cc-bridge
+label: CC Bridge (Claude Code Gateway)
+kind: platform
+version: 0.1.0
+description: >
+  Claude Code Gateway approval bridge for Hermes Agent.
+  Provides /cc commands for session management, approval control,
+  and git snapshot rollback via the CC Bridge infrastructure.
+author: jinlio
+requires_env:
+  - name: CC_BRIDGE_WORKSPACE
+    description: "Working directory for Claude Code sessions"
+    prompt: "Workspace path"
+    password: false
+optional_env:
+  - name: CC_BRIDGE_MODE
+    description: "Approval mode: efficient (default) or strict"
+    prompt: "Approval mode"
+    password: false
+  - name: CC_BRIDGE_SECRET
+    description: "Shared secret for approval API authentication"
+    prompt: "Shared secret"
+    password: true
+  - name: CC_BRIDGE_ALLOWED_USERS
+    description: "Comma-separated user IDs allowed to use CC Bridge"
+    prompt: "Allowed users"
+    password: false
+  - name: CC_BRIDGE_ALLOW_ALL_USERS
+    description: "Set to 'true' to allow all users"
+    prompt: "Allow all users"
+    password: false
+  - name: CC_BRIDGE_HOME_CHANNEL
+    description: "Default channel for cron/home delivery"
+    prompt: "Home channel"
+    password: false

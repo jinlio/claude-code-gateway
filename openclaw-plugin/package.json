@@ -1,7 +1,7 @@
 {
-  "name": "claude-code-gateway",
+  "name": "claude-code-gateway-openclaw",
   "version": "0.1.0",
-  "description": "A gateway bridge connecting Claude Code CLI to messaging platforms (Feishu/Lark, WeCom, etc.) with approval control, session management, and rollback support.",
+  "description": "OpenClaw plugin for Claude Code Gateway — approval control, session management, and rollback support",
   "main": "src/plugin/index.js",
   "scripts": {
     "start": "node src/plugin/index.js",
