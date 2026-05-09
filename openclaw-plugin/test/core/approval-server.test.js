@@ -8,6 +8,8 @@ const yaml = require('js-yaml');
 const { ApprovalServer } = require('../../src/core/approval-server');
 const { ApprovalRules } = require('../../src/core/approval-rules');
 
+const TEST_SECRET = 'test-secret';
+
 describe('ApprovalServer', () => {
   let tmpDir;
   let server;
@@ -15,7 +17,7 @@ describe('ApprovalServer', () => {
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bridge-server-'));
-    server = new ApprovalServer(tmpDir, 0);
+    server = new ApprovalServer(tmpDir, 0, null, null, 'efficient', TEST_SECRET);
     const port = await server.start();
     baseUrl = `http://127.0.0.1:${port}`;
   });
@@ -90,7 +92,10 @@ describe('ApprovalServer', () => {
       });
       const { approvalId } = JSON.parse(createRes.body);
 
-      const respondRes = await fetchUrl(`${baseUrl}/api/approval/respond?id=${approvalId}&action=approve`, { method: 'POST' });
+      const respondRes = await fetchUrl(`${baseUrl}/api/approval/respond?id=${approvalId}&action=approve`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TEST_SECRET}` }
+      });
       expect(respondRes.statusCode).toBe(200);
 
       const statusRes = await fetchUrl(`${baseUrl}/api/approval/status?id=${approvalId}`);
@@ -105,7 +110,10 @@ describe('ApprovalServer', () => {
       });
       const { approvalId } = JSON.parse(createRes.body);
 
-      await fetchUrl(`${baseUrl}/api/approval/respond?id=${approvalId}&action=deny`, { method: 'POST' });
+      await fetchUrl(`${baseUrl}/api/approval/respond?id=${approvalId}&action=deny`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TEST_SECRET}` }
+      });
 
       const statusRes = await fetchUrl(`${baseUrl}/api/approval/status?id=${approvalId}`);
       expect(JSON.parse(statusRes.body).status).toBe('DENIED');

@@ -7,14 +7,17 @@ See: cc-bridge-v3-final-plan.md Section 2
 """
 
 import asyncio
+import logging
 import os
-import random
+import secrets
 import string
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .utils import acquire_workspace_lock, release_workspace_lock
+from .utils import acquire_workspace_lock, iso_timestamp, release_workspace_lock
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_HEARTBEAT_INTERVAL: int = 60000   # 60s in ms
@@ -55,7 +58,7 @@ class ClaudeBridge:
                 try:
                     release_workspace_lock(meta["lockRelease"])
                 except Exception:
-                    pass
+                    logger.warning("workspace lock release failed in checkSessionAlive", exc_info=True)
                 meta["lockRelease"] = None
             self.session_meta.pop(session_id, None)
             return {"alive": False}
@@ -67,7 +70,7 @@ class ClaudeBridge:
                 try:
                     release_workspace_lock(meta["lockRelease"])
                 except Exception:
-                    pass
+                    logger.warning("workspace lock release failed in checkSessionAlive", exc_info=True)
                 meta["lockRelease"] = None
             self.session_meta.pop(session_id, None)
             return {"alive": False}
@@ -95,7 +98,7 @@ class ClaudeBridge:
 
         # Session ID format: cc-{timestamp}-{random6}
         timestamp = int(time.time() * 1000)
-        random_part = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        random_part = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6))
         session_id = f"cc-{timestamp}-{random_part}"
 
         is_one_shot = bool(prompt)
@@ -123,8 +126,8 @@ class ClaudeBridge:
             "cwd": workspace,
             "sessionId": session_id,
             "active": True,
-            "startedAt": datetime.now(timezone.utc).isoformat(),
-            "lastActiveAt": datetime.now(timezone.utc).isoformat(),
+            "startedAt": iso_timestamp(),
+            "lastActiveAt": iso_timestamp(),
             "messageCount": 0,
             "processAlive": True,
             "stashRef": None,
@@ -154,7 +157,7 @@ class ClaudeBridge:
                 try:
                     release_workspace_lock(meta["lockRelease"])
                 except Exception:
-                    pass
+                    logger.warning("workspace lock release failed in terminateSession", exc_info=True)
                 meta["lockRelease"] = None
 
     def startHeartbeat(self) -> None:
@@ -183,7 +186,7 @@ class ClaudeBridge:
                     self.stopHeartbeat()
                     return
 
-        self._heartbeat_task = asyncio.ensure_future(_heartbeat_loop())
+        self._heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
     def stopHeartbeat(self) -> None:
         """Stop the heartbeat timer."""
@@ -195,5 +198,5 @@ class ClaudeBridge:
         """Update lastActiveAt and increment messageCount for a session."""
         meta = self.session_meta.get(session_id)
         if meta:
-            meta["lastActiveAt"] = datetime.now(timezone.utc).isoformat()
+            meta["lastActiveAt"] = iso_timestamp()
             meta["messageCount"] = meta.get("messageCount", 0) + 1

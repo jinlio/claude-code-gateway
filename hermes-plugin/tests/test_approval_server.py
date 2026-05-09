@@ -85,7 +85,7 @@ async def server(data_dir, approval_rules):
         port=0,
         approval_rules=approval_rules,
         current_mode="efficient",
-        shared_secret=None,
+        shared_secret="test-secret",
     )
     port = await srv.start()
     assert port > 0
@@ -116,6 +116,21 @@ async def server_strict(data_dir, approval_rules):
         port=0,
         approval_rules=approval_rules,
         current_mode="strict",
+        shared_secret="test-secret",
+    )
+    port = await srv.start()
+    yield srv
+    await srv.stop()
+
+
+@pytest.fixture()
+async def server_no_secret(data_dir, approval_rules):
+    """Server without a shared secret configured."""
+    srv = ApprovalServer(
+        data_dir=data_dir,
+        port=0,
+        approval_rules=approval_rules,
+        current_mode="efficient",
         shared_secret=None,
     )
     port = await srv.start()
@@ -131,7 +146,7 @@ async def server_no_rules(data_dir):
         port=0,
         approval_rules=None,
         current_mode="efficient",
-        shared_secret=None,
+        shared_secret="test-secret",
     )
     port = await srv.start()
     yield srv
@@ -321,9 +336,11 @@ class TestApprovalStatus:
                 assert status_data["status"] == "PENDING"
 
             # Approve it
+            headers = {"Authorization": "Bearer test-secret"}
             async with session.post(
                 f"{_base_url(port)}/api/approval/respond",
                 params={"id": approval_id, "action": "approve"},
+                headers=headers,
             ) as resp:
                 assert resp.status == 200
 
@@ -348,9 +365,11 @@ class TestApprovalStatus:
                 approval_id = (await resp.json())["approvalId"]
 
             # Deny it
+            headers = {"Authorization": "Bearer test-secret"}
             async with session.post(
                 f"{_base_url(port)}/api/approval/respond",
                 params={"id": approval_id, "action": "deny"},
+                headers=headers,
             ) as resp:
                 assert resp.status == 200
 
@@ -371,13 +390,24 @@ class TestApprovalStatus:
             ) as resp:
                 assert resp.status == 404
 
-    async def test_returns_404_when_id_param_missing(self, server):
+    async def test_returns_400_when_id_param_missing(self, server):
         port = server.getPort()
         async with ClientSession() as session:
             async with session.get(
                 f"{_base_url(port)}/api/approval/status",
             ) as resp:
-                assert resp.status == 404
+                assert resp.status == 400
+                assert await resp.text() == "Invalid or missing id parameter"
+
+    async def test_returns_400_when_id_param_too_short(self, server):
+        port = server.getPort()
+        async with ClientSession() as session:
+            async with session.get(
+                f"{_base_url(port)}/api/approval/status",
+                params={"id": "abc"},
+            ) as resp:
+                assert resp.status == 400
+                assert await resp.text() == "Invalid or missing id parameter"
 
 
 # ---------------------------------------------------------------------------
@@ -486,8 +516,8 @@ class TestApprovalRespond:
             ) as resp:
                 assert resp.status == 403
 
-    async def test_no_secret_required_when_not_configured(self, server):
-        port = server.getPort()
+    async def test_respond_denied_when_no_secret_configured(self, server_no_secret):
+        port = server_no_secret.getPort()
         async with ClientSession() as session:
             body = _make_request_body(
                 tool_name="Bash",
@@ -498,14 +528,34 @@ class TestApprovalRespond:
             ) as resp:
                 approval_id = (await resp.json())["approvalId"]
 
-            # No Authorization header — should succeed
+            # Respond should be denied when no shared secret is configured
             async with session.post(
                 f"{_base_url(port)}/api/approval/respond",
                 params={"id": approval_id, "action": "approve"},
             ) as resp:
-                assert resp.status == 200
-                text = await resp.text()
-                assert text == "OK"
+                assert resp.status == 403
+
+    async def test_respond_returns_400_when_id_missing(self, server_with_secret):
+        port = server_with_secret.getPort()
+        async with ClientSession() as session:
+            headers = {"Authorization": "Bearer s3cret"}
+            async with session.post(
+                f"{_base_url(port)}/api/approval/respond",
+                params={"action": "approve"},
+                headers=headers,
+            ) as resp:
+                assert resp.status == 400
+
+    async def test_respond_returns_400_when_action_invalid(self, server_with_secret):
+        port = server_with_secret.getPort()
+        async with ClientSession() as session:
+            headers = {"Authorization": "Bearer s3cret"}
+            async with session.post(
+                f"{_base_url(port)}/api/approval/respond",
+                params={"id": "some-id", "action": "invalid"},
+                headers=headers,
+            ) as resp:
+                assert resp.status == 400
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +593,45 @@ class TestApprovalServerErrors:
                 f"{_base_url(port)}/api/approval/request",
                 data='{"broken": ',
                 headers={"Content-Type": "application/json"},
+            ) as resp:
+                assert resp.status == 400
+
+    async def test_missing_required_field_returns_400(self, server):
+        port = server.getPort()
+        async with ClientSession() as session:
+            # Missing sessionId
+            async with session.post(
+                f"{_base_url(port)}/api/approval/request",
+                json={"toolName": "Bash", "toolInput": "{}", "cwd": "/tmp"},
+            ) as resp:
+                assert resp.status == 400
+                text = await resp.text()
+                assert "sessionId" in text
+
+    async def test_missing_tool_name_returns_400(self, server):
+        port = server.getPort()
+        async with ClientSession() as session:
+            async with session.post(
+                f"{_base_url(port)}/api/approval/request",
+                json={"sessionId": "s1", "toolInput": "{}", "cwd": "/tmp"},
+            ) as resp:
+                assert resp.status == 400
+
+    async def test_missing_tool_input_returns_400(self, server):
+        port = server.getPort()
+        async with ClientSession() as session:
+            async with session.post(
+                f"{_base_url(port)}/api/approval/request",
+                json={"sessionId": "s1", "toolName": "Bash", "cwd": "/tmp"},
+            ) as resp:
+                assert resp.status == 400
+
+    async def test_missing_cwd_returns_400(self, server):
+        port = server.getPort()
+        async with ClientSession() as session:
+            async with session.post(
+                f"{_base_url(port)}/api/approval/request",
+                json={"sessionId": "s1", "toolName": "Bash", "toolInput": "{}"},
             ) as resp:
                 assert resp.status == 400
 

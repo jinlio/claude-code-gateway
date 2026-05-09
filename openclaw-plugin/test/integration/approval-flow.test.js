@@ -32,6 +32,8 @@ describe('Approval flow — end-to-end integration', () => {
   let server;
   let baseUrl;
 
+const INTEG_SECRET = 'integ-secret';
+
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bridge-integ-'));
     rulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bridge-integ-rules-'));
@@ -50,7 +52,7 @@ describe('Approval flow — end-to-end integration', () => {
     }));
 
     rules = new ApprovalRules(rulesPath);
-    server = new ApprovalServer(tmpDir, 0, null, rules, 'efficient');
+    server = new ApprovalServer(tmpDir, 0, null, rules, 'efficient', INTEG_SECRET);
     const port = await server.start();
     baseUrl = `http://127.0.0.1:${port}`;
   });
@@ -118,7 +120,7 @@ describe('Approval flow — end-to-end integration', () => {
       expect(JSON.parse(statusRes.body).status).toBe('PENDING');
 
       // Approve via respond endpoint
-      await fetchUrl(`${baseUrl}/api/approval/respond?id=${reqData.approvalId}&action=approve`, { method: 'POST' });
+      await fetchUrl(`${baseUrl}/api/approval/respond?id=${reqData.approvalId}&action=approve`, { method: 'POST', headers: { 'Authorization': `Bearer ${INTEG_SECRET}` } });
 
       // Check status is now APPROVED
       const finalRes = await fetchUrl(`${baseUrl}/api/approval/status?id=${reqData.approvalId}`);
@@ -140,7 +142,7 @@ describe('Approval flow — end-to-end integration', () => {
       expect(reqData.status).toBe('PENDING');
 
       // Deny via respond endpoint
-      await fetchUrl(`${baseUrl}/api/approval/respond?id=${reqData.approvalId}&action=deny`, { method: 'POST' });
+      await fetchUrl(`${baseUrl}/api/approval/respond?id=${reqData.approvalId}&action=deny`, { method: 'POST', headers: { 'Authorization': `Bearer ${INTEG_SECRET}` } });
 
       const finalRes = await fetchUrl(`${baseUrl}/api/approval/status?id=${reqData.approvalId}`);
       expect(JSON.parse(finalRes.body).status).toBe('DENIED');
@@ -384,7 +386,7 @@ describe('Approval flow — end-to-end integration', () => {
 
       // Restart with a notification callback
       const notifyCb = jest.fn();
-      const newServer = new ApprovalServer(tmpDir, 0, notifyCb, rules, 'efficient');
+      const newServer = new ApprovalServer(tmpDir, 0, notifyCb, rules, 'efficient', INTEG_SECRET);
       await newServer.start();
 
       expect(notifyCb).toHaveBeenCalledWith(expect.objectContaining({

@@ -24,6 +24,30 @@ def has_back_reference(pattern: str) -> bool:
     return bool(re.search(r"\\[1-9]", pattern))
 
 
+def has_overlapping_alternation(pattern: str) -> bool:
+    """Detect alternation-based catastrophic backtracking like (a|a)+.
+
+    Finds grouped quantified alternations (...|...)+ or (...|...)*
+    and checks whether branches share common prefixes, which causes
+    exponential backtracking on non-matching inputs.
+    """
+    group_alt_quant = re.compile(r"\(([^)]+)\)([+*{])")
+    for match in group_alt_quant.finditer(pattern):
+        branches = match.group(1).split("|")
+        if len(branches) < 2:
+            continue
+        # Check if any two branches share a common prefix (first char)
+        prefixes: set[str] = set()
+        for branch in branches:
+            branch = branch.strip()
+            if branch:
+                prefixes.add(branch[0])
+        # If multiple branches share the same first character, overlap exists
+        if len(prefixes) < len(branches):
+            return True
+    return False
+
+
 class ApprovalRules:
     """Load and evaluate approval rules from a YAML file.
 
@@ -54,6 +78,10 @@ class ApprovalRules:
                 if has_back_reference(cmd_pattern):
                     raise ValueError(
                         f"Rule regex has back references: {cmd_pattern}"
+                    )
+                if has_overlapping_alternation(cmd_pattern):
+                    raise ValueError(
+                        f"Rule regex has overlapping alternation: {cmd_pattern}"
                     )
                 try:
                     rule["_compiled_regex"] = re.compile(cmd_pattern)

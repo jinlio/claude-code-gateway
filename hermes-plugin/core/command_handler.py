@@ -7,6 +7,7 @@ See: cc-bridge-v3-final-plan.md Sections 7, 8
 """
 
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ from .context_manager import ContextManager
 from .git_snapshot import GitSnapshot
 from .messenger import DefaultMessenger
 from .session_manager import PersistentSessionManager
+
+logger = logging.getLogger(__name__)
 
 
 def formatToolInput(tool_name: str, raw_input: str) -> str:
@@ -102,7 +105,7 @@ class CommandHandler:
                                 },
                             )
             except Exception:
-                pass
+                logger.warning("stdout forwarding failed", exc_info=True)
 
             # Flush remaining buffer on exit
             if output_buffer.strip() and target:
@@ -131,7 +134,7 @@ class CommandHandler:
                             },
                         )
             except Exception:
-                pass
+                logger.warning("stderr forwarding failed", exc_info=True)
 
         async def _on_exit() -> None:
             await proc.wait()
@@ -149,9 +152,9 @@ class CommandHandler:
 
         # Schedule forwarding tasks
         import asyncio
-        asyncio.ensure_future(_forward_stdout())
-        asyncio.ensure_future(_forward_stderr())
-        asyncio.ensure_future(_on_exit())
+        asyncio.create_task(_forward_stdout())
+        asyncio.create_task(_forward_stderr())
+        asyncio.create_task(_on_exit())
 
     async def handleCommand(
         self,

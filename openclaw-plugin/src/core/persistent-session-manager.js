@@ -26,6 +26,7 @@ class PersistentSessionManager {
       active: true,
       startedAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
+      stoppedAt: null,
       messageCount: 0,
       processAlive: true
     };

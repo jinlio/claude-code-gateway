@@ -8,11 +8,13 @@ See: cc-bridge-v3-final-plan.md Section 8
 """
 
 import json
+import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .utils import atomic_write_sync, safe_load_json
+from .utils import atomic_write_sync, iso_timestamp, safe_load_json
+
+logger = logging.getLogger(__name__)
 
 
 class PersistentSessionManager:
@@ -38,8 +40,8 @@ class PersistentSessionManager:
             "workspace": workspace,
             "sessionId": session_id,
             "active": True,
-            "startedAt": datetime.now(timezone.utc).isoformat(),
-            "lastActiveAt": datetime.now(timezone.utc).isoformat(),
+            "startedAt": iso_timestamp(),
+            "lastActiveAt": iso_timestamp(),
             "messageCount": 0,
             "processAlive": True,
         }
@@ -63,7 +65,7 @@ class PersistentSessionManager:
             key = self.getKey(sender_id, active.get("workspace", ""))
             if key in sessions:
                 sessions[key]["active"] = False
-                sessions[key]["stoppedAt"] = datetime.now(timezone.utc).isoformat()
+                sessions[key]["stoppedAt"] = iso_timestamp()
                 atomic_write_sync(
                     self.sessions_path,
                     json.dumps(sessions, indent=2),

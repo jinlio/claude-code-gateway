@@ -12,6 +12,8 @@ jest.mock('../../src/core/git-snapshot');
 jest.mock('../../src/core/hook-inbox');
 jest.mock('../../src/core/persistent-session-manager');
 jest.mock('../../src/core/context-manager');
+jest.mock('../../src/core/feishu-messenger');
+jest.mock('../../src/core/command-parser');
 
 const { register, formatToolInput, handleCommand } = require('../../src/plugin/index');
 const { ClaudeBridge } = require('../../src/core/claude-bridge');
@@ -20,6 +22,8 @@ const { ApprovalRules } = require('../../src/core/approval-rules');
 const { HookInbox } = require('../../src/core/hook-inbox');
 const { PersistentSessionManager } = require('../../src/core/persistent-session-manager');
 const { ContextManager } = require('../../src/core/context-manager');
+const { FeishuMessenger } = require('../../src/core/feishu-messenger');
+const { CommandParser } = require('../../src/core/command-parser');
 
 function createMockApi(extraConfig = {}) {
   return {
@@ -79,6 +83,33 @@ function setupMocks() {
     cleanup: jest.fn(),
     buildContextPrompt: jest.fn().mockReturnValue('test context')
   }));
+  FeishuMessenger.mockImplementation(() => ({
+    formatSessionStatus: jest.fn().mockReturnValue('session status'),
+    formatApprovalNotification: jest.fn().mockReturnValue('approval notification'),
+    formatErrorMessage: jest.fn().mockReturnValue('error message'),
+    sendToUser: jest.fn().mockResolvedValue(undefined)
+  }));
+  CommandParser.mockImplementation(() => ({
+    getHelpText: jest.fn().mockReturnValue('Commands: /cc, /cc_start, ...')
+  }));
+}
+
+/** Build a deps object for calling handleCommand directly in tests */
+function buildDeps(mockApi, overrides = {}) {
+  return {
+    bridge: new ClaudeBridge(),
+    approvalServer: new ApprovalServer(),
+    sessionManager: new PersistentSessionManager(),
+    messenger: new FeishuMessenger(),
+    commandParser: new CommandParser(),
+    contextManagers: new Map(),
+    sessionRoutes: new Map(),
+    hookInbox: overrides.hookInbox || null,
+    pluginConfig: mockApi?.pluginConfig || {},
+    defaultWorkspace: mockApi?.pluginConfig?.workspace || process.cwd(),
+    currentMode: overrides.currentMode || 'efficient',
+    ...overrides,
+  };
 }
 
 describe('formatToolInput', () => {
@@ -187,94 +218,92 @@ describe('handleCommand', () => {
 
   it('returns usage for /cc without prompt', async () => {
     const mockApi = createMockApi();
-    const bridgeInstance = new ClaudeBridge();
-    bridgeInstance.findActiveSession.mockReturnValue(null);
     register(mockApi);
+    const deps = buildDeps(mockApi);
 
-    const result = await handleCommand('cc', '', 'u1', 'feishu', null);
+    const result = await handleCommand(deps, 'cc', '', 'u1', 'feishu', null);
     expect(result).toContain('用法');
   });
 
   it('returns no session for /cc_stop without session', async () => {
     const mockApi = createMockApi();
-    const bridgeInstance = new ClaudeBridge();
-    bridgeInstance.findActiveSession.mockReturnValue(null);
     register(mockApi);
+    const deps = buildDeps(mockApi);
 
-    const result = await handleCommand('cc_stop', '', 'u1', 'feishu', null);
+    const result = await handleCommand(deps, 'cc_stop', '', 'u1', 'feishu', null);
     expect(result).toContain('没有持久会话');
   });
 
   it('returns no session for /cc_status without session', async () => {
     const mockApi = createMockApi();
-    const bridgeInstance = new ClaudeBridge();
-    bridgeInstance.findActiveSession.mockReturnValue(null);
     register(mockApi);
+    const deps = buildDeps(mockApi);
 
-    const result = await handleCommand('cc_status', '', 'u1', 'feishu', null);
+    const result = await handleCommand(deps, 'cc_status', '', 'u1', 'feishu', null);
     expect(result).toContain('没有活跃');
   });
 
   it('returns usage for /cc_answer without answer', async () => {
     const mockApi = createMockApi();
-    const bridgeInstance = new ClaudeBridge();
-    bridgeInstance.findActiveSession.mockReturnValue(null);
     register(mockApi);
+    const deps = buildDeps(mockApi);
 
-    const result = await handleCommand('cc_answer', '', 'u1', 'feishu', null);
+    const result = await handleCommand(deps, 'cc_answer', '', 'u1', 'feishu', null);
     expect(result).toContain('用法');
   });
 
   it('returns usage for /cc_approve without shortId', async () => {
     const mockApi = createMockApi();
     register(mockApi);
+    const deps = buildDeps(mockApi);
 
-    const result = await handleCommand('cc_approve', '', 'u1', 'feishu', null);
+    const result = await handleCommand(deps, 'cc_approve', '', 'u1', 'feishu', null);
     expect(result).toContain('用法');
   });
 
   it('returns usage for /cc_deny without shortId', async () => {
     const mockApi = createMockApi();
     register(mockApi);
+    const deps = buildDeps(mockApi);
 
-    const result = await handleCommand('cc_deny', '', 'u1', 'feishu', null);
+    const result = await handleCommand(deps, 'cc_deny', '', 'u1', 'feishu', null);
     expect(result).toContain('用法');
   });
 
   it('switches to efficient mode', async () => {
     const mockApi = createMockApi();
-    const bridgeInstance = new ClaudeBridge();
-    bridgeInstance.findActiveSession.mockReturnValue('s1');
-    bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', active: true });
     register(mockApi);
 
-    // Start services to initialize approvalServer
+    // Start services to initialize approvalServer and hookInbox
     const gatewayStartCall = mockApi.on.mock.calls.find(c => c[0] === 'gateway_start');
     if (gatewayStartCall) await gatewayStartCall[1]();
 
-    const result = await handleCommand('cc_mode', 'efficient', 'u1', 'feishu', null);
+    const deps = buildDeps(mockApi, { hookInbox: new HookInbox() });
+
+    const result = await handleCommand(deps, 'cc_mode', 'efficient', 'u1', 'feishu', null);
     expect(result).toContain('efficient');
   });
 
   it('switches to strict mode', async () => {
     const mockApi = createMockApi();
-    const bridgeInstance = new ClaudeBridge();
-    bridgeInstance.findActiveSession.mockReturnValue('s1');
-    bridgeInstance.sessionMeta.set('s1', { senderId: 'u1', active: true });
     register(mockApi);
 
+    // Start services to initialize approvalServer and hookInbox
     const gatewayStartCall = mockApi.on.mock.calls.find(c => c[0] === 'gateway_start');
     if (gatewayStartCall) await gatewayStartCall[1]();
 
-    const result = await handleCommand('cc_mode', 'strict', 'u1', 'feishu', null);
+    const deps = buildDeps(mockApi, { hookInbox: new HookInbox() });
+
+    const result = await handleCommand(deps, 'cc_mode', 'strict', 'u1', 'feishu', null);
     expect(result).toContain('strict');
   });
 
   it('returns cancel message for /cc_revert --cancel', async () => {
     const mockApi = createMockApi();
     register(mockApi);
+    const deps = buildDeps(mockApi);
 
-    const result = await handleCommand('cc_revert', '--cancel', 'u1', 'feishu', null);
+    const result = await handleCommand(deps, 'cc_revert', '--cancel', 'u1', 'feishu', null);
     expect(result).toContain('已取消');
   });
 });

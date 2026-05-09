@@ -11,9 +11,12 @@ See: cc-bridge-v3-final-plan.md Section 5
 """
 
 import asyncio
+import logging
 import re
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Regex for sessionId format: cc-<timestamp>-<random>
 SESSION_ID_REGEX = re.compile(r"CC-snapshot-(cc-\d+-[a-z0-9]+)-(\d+)")
@@ -34,17 +37,18 @@ class GitSnapshot:
 
         stash_ref = f"CC-snapshot-{self.session_id}-{int(time.time() * 1000)}"
 
-        # Sanitize stashRef to prevent shell injection
+        # Sanitize stashRef for message readability (no shell injection risk with exec)
         safe_ref = re.sub(r"[^a-zA-Z0-9_.-]", "_", stash_ref)
 
         try:
-            await self._git_exec("git add -A", cwd=meta["cwd"])
+            await self._git_exec("git", "add", "-A", cwd=meta["cwd"])
             await self._git_exec(
-                f'git stash push -u -m "{safe_ref}"', cwd=meta["cwd"]
+                "git", "stash", "push", "-u", "-m", safe_ref, cwd=meta["cwd"]
             )
             meta["stashRef"] = safe_ref
             return True
         except Exception:
+            logger.error("git snapshot creation failed", exc_info=True)
             return False
 
     async def revert(self) -> dict[str, Any]:
@@ -54,7 +58,7 @@ class GitSnapshot:
             return {"success": False, "message": "No matching snapshot found"}
 
         try:
-            stash_list = await self._git_exec_output("git stash list", cwd=meta["cwd"])
+            stash_list = await self._git_exec_output("git", "stash", "list", cwd=meta["cwd"])
             lines = stash_list.split("\n")
             idx = -1
             for i, line in enumerate(lines):
@@ -67,15 +71,15 @@ class GitSnapshot:
 
             # Discard current working tree changes before applying stash
             try:
-                await self._git_exec("git checkout -- .", cwd=meta["cwd"])
+                await self._git_exec("git", "checkout", "--", ".", cwd=meta["cwd"])
             except Exception:
-                pass
+                logger.warning("git checkout failed during revert", exc_info=True)
             try:
-                await self._git_exec("git clean -fd", cwd=meta["cwd"])
+                await self._git_exec("git", "clean", "-fd", cwd=meta["cwd"])
             except Exception:
-                pass
+                logger.warning("git clean failed during revert", exc_info=True)
 
-            await self._git_exec(f"git stash apply stash@{{{idx}}}", cwd=meta["cwd"])
+            await self._git_exec("git", "stash", "apply", f"stash@{{{idx}}}", cwd=meta["cwd"])
 
             # Clear stashRef to prevent duplicate revert
             meta["stashRef"] = None
@@ -90,7 +94,7 @@ class GitSnapshot:
             return {"success": False, "message": "No matching snapshot found"}
 
         try:
-            stash_list = await self._git_exec_output("git stash list", cwd=meta["cwd"])
+            stash_list = await self._git_exec_output("git", "stash", "list", cwd=meta["cwd"])
             entries = stash_list.split("\n")
             idx = -1
             for i, line in enumerate(entries):
@@ -102,7 +106,7 @@ class GitSnapshot:
                 meta["stashRef"] = None
                 return {"success": False, "message": "Snapshot manually deleted or missing"}
 
-            await self._git_exec(f"git stash drop stash@{{{idx}}}", cwd=meta["cwd"])
+            await self._git_exec("git", "stash", "drop", f"stash@{{{idx}}}", cwd=meta["cwd"])
             meta["stashRef"] = None
             return {"success": True, "message": "Snapshot dropped"}
         except Exception as err:
@@ -114,7 +118,7 @@ class GitSnapshot:
     ) -> None:
         """Remove old stash snapshots that are not associated with active sessions."""
         try:
-            stash_list = await GitSnapshot._git_exec_output_static("git stash list", cwd=cwd)
+            stash_list = await GitSnapshot._git_exec_output_static("git", "stash", "list", cwd=cwd)
             cutoff = int(time.time() * 1000) - cleanup_days * 24 * 3600000
             entries = [line for line in stash_list.split("\n") if line.strip()]
 
@@ -143,30 +147,30 @@ class GitSnapshot:
             for idx in reversed(to_drop):
                 try:
                     await GitSnapshot._git_exec_static(
-                        f"git stash drop stash@{{{idx}}}", cwd=cwd
+                        "git", "stash", "drop", f"stash@{{{idx}}}", cwd=cwd
                     )
                 except Exception:
-                    pass
+                    logger.warning("git stash drop failed during cleanup", exc_info=True)
         except Exception:
-            pass
+            logger.warning("cleanupOldStashes failed", exc_info=True)
 
     # ---- Helpers for async git execution ----
 
-    async def _git_exec(self, cmd: str, cwd: str) -> None:
+    async def _git_exec(self, *args: str, cwd: str) -> None:
         """Run a git command, ignoring output. Raises on non-zero exit."""
-        proc = await asyncio.create_subprocess_shell(
-            cmd, cwd=cwd,
+        proc = await asyncio.create_subprocess_exec(
+            *args, cwd=cwd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
         await proc.wait()
         if proc.returncode != 0:
-            raise RuntimeError(f"git command failed: {cmd} (exit {proc.returncode})")
+            raise RuntimeError(f"git command failed: {args} (exit {proc.returncode})")
 
-    async def _git_exec_output(self, cmd: str, cwd: str) -> str:
+    async def _git_exec_output(self, *args: str, cwd: str) -> str:
         """Run a git command and return its stdout."""
-        proc = await asyncio.create_subprocess_shell(
-            cmd, cwd=cwd,
+        proc = await asyncio.create_subprocess_exec(
+            *args, cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -174,22 +178,22 @@ class GitSnapshot:
         return stdout.decode("utf-8", errors="replace")
 
     @staticmethod
-    async def _git_exec_static(cmd: str, cwd: str) -> None:
+    async def _git_exec_static(*args: str, cwd: str) -> None:
         """Static version of _git_exec for cleanupOldStashes."""
-        proc = await asyncio.create_subprocess_shell(
-            cmd, cwd=cwd,
+        proc = await asyncio.create_subprocess_exec(
+            *args, cwd=cwd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
         await proc.wait()
         if proc.returncode != 0:
-            raise RuntimeError(f"git command failed: {cmd} (exit {proc.returncode})")
+            raise RuntimeError(f"git command failed: {args} (exit {proc.returncode})")
 
     @staticmethod
-    async def _git_exec_output_static(cmd: str, cwd: str) -> str:
+    async def _git_exec_output_static(*args: str, cwd: str) -> str:
         """Static version of _git_exec_output for cleanupOldStashes."""
-        proc = await asyncio.create_subprocess_shell(
-            cmd, cwd=cwd,
+        proc = await asyncio.create_subprocess_exec(
+            *args, cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )

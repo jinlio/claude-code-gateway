@@ -11,13 +11,18 @@ Uses aiohttp for the HTTP server.  Three endpoints:
 See: cc-bridge-v3-final-plan.md Section 3, shared/approval-api.md
 """
 
+import asyncio
+import hmac
 import json
+import logging
 from typing import Any, Callable, Optional
 
 from aiohttp import web
 
 from .approval_rules import ApprovalRules
 from .approval_store import ApprovalStore
+
+logger = logging.getLogger(__name__)
 
 
 class ApprovalServer:
@@ -42,6 +47,14 @@ class ApprovalServer:
         self.current_mode: str = current_mode
         self.shared_secret: Optional[str] = shared_secret
         self.onApprovalNeeded: Optional[Callable] = None
+        self._cleanup_task: Optional[asyncio.Task] = None
+
+    @web.middleware
+    async def _security_headers_middleware(self, request, handler):
+        """Add X-Content-Type-Options: nosniff to all responses."""
+        response = await handler(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     def setMode(self, mode: str) -> None:
         """Switch the approval mode (efficient or strict)."""
@@ -53,7 +66,7 @@ class ApprovalServer:
         if timed_out_count > 0:
             self._notify_timed_out_requests(timed_out_count)
 
-        app = web.Application()
+        app = web.Application(middlewares=[self._security_headers_middleware])
         app.router.add_post("/api/approval/request", self._handle_request)
         app.router.add_get("/api/approval/status", self._handle_status)
         app.router.add_post("/api/approval/respond", self._handle_respond)
@@ -64,6 +77,9 @@ class ApprovalServer:
         # Bind to 127.0.0.1; port=0 means OS-assigned
         self.site = web.TCPSite(self.runner, "127.0.0.1", self.port)
         await self.site.start()
+
+        # Start periodic cleanup
+        self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
 
         # Retrieve the actual assigned port
         # In aiohttp >=3.9, the bound sockets live on the TCPSite's
@@ -80,6 +96,9 @@ class ApprovalServer:
 
     async def stop(self) -> None:
         """Stop the server and mark all pending requests as TIMEOUT."""
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            self._cleanup_task = None
         self.store.markAllPendingAsTimeout()
         self.store.flush()
         if self.site:
@@ -88,6 +107,12 @@ class ApprovalServer:
             await self.runner.cleanup()
         self.site = None
         self.runner = None
+
+    async def _periodic_cleanup(self) -> None:
+        """Periodically cleanup old approval requests every 10 minutes."""
+        while True:
+            await asyncio.sleep(600)  # 10 minutes
+            self.store.cleanup()
 
     def _notify_timed_out_requests(self, timed_out_count: int) -> None:
         """Notify about requests that timed out on server restart."""
@@ -108,8 +133,14 @@ class ApprovalServer:
         try:
             body = await request.text()
             params = json.loads(body)
-        except (json.JSONDecodeError, Exception) as exc:
-            return web.Response(status=400, text=str(exc))
+        except json.JSONDecodeError:
+            return web.Response(status=400, text="Invalid JSON body")
+
+        # Validate required fields
+        REQUIRED_FIELDS = ("sessionId", "toolName", "toolInput", "cwd")
+        for field in REQUIRED_FIELDS:
+            if not params.get(field):
+                return web.Response(status=400, text=f"Missing required field: {field}")
 
         # Rule-based pre-check: auto_approve if rules match
         if self.approval_rules:
@@ -163,8 +194,8 @@ class ApprovalServer:
     async def _handle_status(self, request: web.Request) -> web.Response:
         """GET /api/approval/status?id={uuid} — poll the status of a request."""
         id_ = request.query.get("id")
-        if not id_:
-            return web.Response(status=404, text="NOT FOUND")
+        if not id_ or len(id_) < 8:
+            return web.Response(status=400, text="Invalid or missing id parameter")
 
         item = self.store.get(id_)
         if not item:
@@ -184,14 +215,26 @@ class ApprovalServer:
 
         Require Bearer sharedSecret authentication on this endpoint.
         """
-        # Require shared secret for approval responses
+        # Deny all respond requests when shared_secret is not configured
+        if not self.shared_secret:
+            return web.Response(status=403, text="Forbidden: no shared secret configured")
+
         auth_header = request.headers.get("Authorization", "")
-        if self.shared_secret and auth_header != f"Bearer {self.shared_secret}":
+        expected = f"Bearer {self.shared_secret}"
+        if not hmac.compare_digest(auth_header.encode(), expected.encode()):
+            logger.warning("Approval respond auth failure from %s", request.remote)
             return web.Response(status=403, text="Forbidden")
 
         id_ = request.query.get("id")
+        if not id_:
+            return web.Response(status=400, text="Missing id parameter")
+
         action = request.query.get("action")
+        if action not in ("approve", "deny"):
+            return web.Response(status=400, text="Invalid action")
+
         new_status = "APPROVED" if action == "approve" else "DENIED"
+        logger.info("Approval %s for request %s", new_status, id_)
         self.store.resolve(id_, new_status)
 
         return web.Response(status=200, text="OK")

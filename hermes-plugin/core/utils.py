@@ -1,14 +1,24 @@
-"""Utils — atomic file write, safe JSON load, file lock helpers.
+"""Utils — atomic file write, safe JSON load, file lock helpers, timestamp normalization.
 
 Port of openclaw-plugin/src/core/utils.js.
 See: cc-bridge-v3-final-plan.md Section 2.3
 """
 
 import json
+import logging
 import os
 import pathlib
+from datetime import datetime, timezone
+from typing import Any
 
 from filelock import FileLock
+
+logger = logging.getLogger(__name__)
+
+
+def iso_timestamp() -> str:
+    """Return ISO 8601 timestamp matching Node.js Date.toISOString() format (.000Z)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def atomic_write_sync(file_path: str, data: str) -> None:
@@ -30,6 +40,7 @@ def atomic_write_sync(file_path: str, data: str) -> None:
     except OSError:
         # Windows: os.replace may fail if the target file is locked or exists
         # Fall back to unlink + replace (not atomic, but functional)
+        logger.warning("atomic_write os.replace failed, falling back to unlink+replace", exc_info=True)
         try:
             os.unlink(file_path)
         except FileNotFoundError:
@@ -37,7 +48,7 @@ def atomic_write_sync(file_path: str, data: str) -> None:
         os.replace(tmp_path, file_path)
 
 
-def safe_load_json(file_path: str) -> dict:
+def safe_load_json(file_path: str) -> dict[str, Any]:
     """Load a JSON file, returning {} on any error (missing, corrupt, etc.)."""
     try:
         if os.path.exists(file_path):
@@ -55,7 +66,7 @@ def acquire_workspace_lock(workspace: str) -> FileLock:
     Returns a FileLock instance; call release() on it to release.
     """
     lock_path = os.path.join(workspace, ".cc-workspace.lock")
-    lock = FileLock(lock_path, timeout=5)
+    lock = FileLock(lock_path, timeout=30)
     lock.acquire()
     return lock
 
@@ -65,5 +76,4 @@ def release_workspace_lock(lock: FileLock) -> None:
     try:
         lock.release()
     except Exception:
-        # Silently ignore release errors (lock may have been released already)
-        pass
+        logger.warning("workspace lock release failed", exc_info=True)

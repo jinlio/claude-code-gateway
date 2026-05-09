@@ -8,12 +8,14 @@ See: cc-bridge-v3-final-plan.md Section 3.5
 """
 
 import json
+import logging
 import os
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .utils import atomic_write_sync
+from .utils import atomic_write_sync, iso_timestamp
+
+logger = logging.getLogger(__name__)
 
 
 class ApprovalStore:
@@ -39,6 +41,7 @@ class ApprovalStore:
                     self.requests[item["id"]] = item
         except (json.JSONDecodeError, OSError):
             # File corrupt or missing, start fresh
+            logger.warning("approval store load failed, starting fresh", exc_info=True)
             pass
 
     def _load_timed_out_count(self) -> int:
@@ -61,7 +64,7 @@ class ApprovalStore:
             "toolInput": params["toolInput"],
             "cwd": params["cwd"],
             "status": "PENDING",
-            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "createdAt": iso_timestamp(),
         }
         self._flush()
         return id_
@@ -110,7 +113,7 @@ class ApprovalStore:
         item = self.requests.get(id_)
         if item is not None:
             item["status"] = status
-            item["resolvedAt"] = datetime.now(timezone.utc).isoformat()
+            item["resolvedAt"] = iso_timestamp()
             self._flush()
         return item
 
@@ -126,6 +129,7 @@ class ApprovalStore:
 
     def cleanup(self) -> None:
         """Remove resolved/timeout/denied items older than 1 hour."""
+        from datetime import datetime, timezone
         cutoff = datetime.now(timezone.utc).timestamp() * 1000 - 3600000
         to_delete: list[str] = []
         for id_, item in self.requests.items():
@@ -138,4 +142,6 @@ class ApprovalStore:
                     to_delete.append(id_)
         for id_ in to_delete:
             del self.requests[id_]
+        if to_delete:
+            logger.info("cleanup removed %d old approval requests", len(to_delete))
         self._flush()

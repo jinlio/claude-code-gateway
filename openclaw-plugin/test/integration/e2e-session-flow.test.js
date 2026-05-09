@@ -50,7 +50,7 @@ describe('E2E: Command parsing + Approval flow + Messenger formatting', () => {
       messenger.sendToUser('user1', info.text);
     };
 
-    server = new ApprovalServer(tmpDir, 0, notifyCallback, rules, 'efficient');
+    server = new ApprovalServer(tmpDir, 0, notifyCallback, rules, 'efficient', 'e2e-secret');
     await server.start();
     store = server.store;
   });
@@ -331,7 +331,7 @@ describe('E2E: Command parsing + Approval flow + Messenger formatting', () => {
         restartMessenger.sendToUser('user1', info.text);
       };
 
-      const newServer = new ApprovalServer(tmpDir, 0, newNotifyCallback, rules, 'efficient');
+      const newServer = new ApprovalServer(tmpDir, 0, newNotifyCallback, rules, 'efficient', 'e2e-secret');
       await newServer.start();
 
       // Check that timeout notification was sent
@@ -346,7 +346,7 @@ describe('E2E: Command parsing + Approval flow + Messenger formatting', () => {
       const restoreNotifyCallback = (info) => {
         messenger.sendToUser('user1', info.text);
       };
-      server = new ApprovalServer(tmpDir, 0, restoreNotifyCallback, restoreRules, 'efficient');
+      server = new ApprovalServer(tmpDir, 0, restoreNotifyCallback, restoreRules, 'efficient', 'e2e-secret');
       await server.start();
       store = server.store;
     });

@@ -136,18 +136,19 @@ class TestGitSnapshotCreate:
             await snapshot.create()
 
         assert mock_exec.call_count == 2
-        first_cmd = mock_exec.call_args_list[0].args[0]
-        second_cmd = mock_exec.call_args_list[1].args[0]
-        assert "git add -A" in first_cmd
-        assert "git stash push" in second_cmd
+        first_args = mock_exec.call_args_list[0].args
+        second_args = mock_exec.call_args_list[1].args
+        assert first_args == ("git", "add", "-A")
+        assert second_args[:4] == ("git", "stash", "push", "-u")
+        assert "-m" in second_args
 
     @pytest.mark.asyncio
     async def test_create_git_add_failure_returns_false(self):
         bridge = _make_bridge_with_session()
         snapshot = GitSnapshot(bridge, "cc-1709123456789-abc123")
 
-        async def _fail_on_add(cmd, cwd):
-            if "git add" in cmd:
+        async def _fail_on_add(*args, cwd):
+            if "add" in args:
                 raise RuntimeError("git add failed")
 
         with patch.object(snapshot, "_git_exec", new_callable=AsyncMock, side_effect=_fail_on_add):
@@ -160,8 +161,8 @@ class TestGitSnapshotCreate:
         bridge = _make_bridge_with_session()
         snapshot = GitSnapshot(bridge, "cc-1709123456789-abc123")
 
-        async def _fail_on_stash(cmd, cwd):
-            if "git stash" in cmd:
+        async def _fail_on_stash(*args, cwd):
+            if "stash" in args:
                 raise RuntimeError("git stash failed")
 
         with patch.object(snapshot, "_git_exec", new_callable=AsyncMock, side_effect=_fail_on_stash):
@@ -189,7 +190,7 @@ class TestGitSnapshotCreate:
             await snapshot.create()
 
         for call in mock_exec.call_args_list:
-            assert call.kwargs.get("cwd") == "/custom/workspace" or call.args[1] == "/custom/workspace"
+            assert call.kwargs.get("cwd") == "/custom/workspace"
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +255,8 @@ class TestGitSnapshotRevert:
 
         stash_list = f"stash@{{0}}: On main: {stash_ref}"
 
-        async def _git_exec_side_effect(cmd, cwd):
-            if "stash apply" in cmd:
+        async def _git_exec_side_effect(*args, cwd):
+            if "apply" in args:
                 raise RuntimeError("conflict")
 
         with (
@@ -287,9 +288,9 @@ class TestGitSnapshotRevert:
             result = await snapshot.revert()
 
         assert result["success"] is True
-        apply_calls = [c for c in mock_exec.call_args_list if "stash apply" in str(c)]
+        apply_calls = [c for c in mock_exec.call_args_list if "apply" in c.args]
         assert len(apply_calls) == 1
-        assert "stash@{2}" in apply_calls[0].args[0]
+        assert "stash@{2}" in apply_calls[0].args
 
     @pytest.mark.asyncio
     async def test_revert_checkout_and_clean_before_apply(self):
@@ -305,9 +306,9 @@ class TestGitSnapshotRevert:
         ):
             await snapshot.revert()
 
-        cmds = [c.args[0] for c in mock_exec.call_args_list]
-        assert "git checkout -- ." in cmds
-        assert "git clean -fd" in cmds
+        cmds = [c.args for c in mock_exec.call_args_list]
+        assert ("git", "checkout", "--", ".") in cmds
+        assert ("git", "clean", "-fd") in cmds
 
     @pytest.mark.asyncio
     async def test_revert_checkout_failure_is_ignored(self):
@@ -319,8 +320,8 @@ class TestGitSnapshotRevert:
 
         stash_list = f"stash@{{0}}: On main: {stash_ref}"
 
-        async def _selective_fail(cmd, cwd):
-            if "checkout" in cmd:
+        async def _selective_fail(*args, cwd):
+            if "checkout" in args:
                 raise RuntimeError("checkout failed")
             # Other commands succeed silently
 
@@ -343,8 +344,8 @@ class TestGitSnapshotRevert:
 
         stash_list = f"stash@{{0}}: On main: {stash_ref}"
 
-        async def _selective_fail(cmd, cwd):
-            if "clean" in cmd:
+        async def _selective_fail(*args, cwd):
+            if "clean" in args:
                 raise RuntimeError("clean failed")
 
         with (
@@ -429,8 +430,8 @@ class TestGitSnapshotDropStash:
 
         stash_list = f"stash@{{0}}: On main: {stash_ref}"
 
-        async def _fail_on_drop(cmd, cwd):
-            if "stash drop" in cmd:
+        async def _fail_on_drop(*args, cwd):
+            if "drop" in args:
                 raise RuntimeError("drop failed")
 
         with (
@@ -459,9 +460,9 @@ class TestGitSnapshotDropStash:
         ):
             await snapshot.dropStash()
 
-        drop_calls = [c for c in mock_exec.call_args_list if "stash drop" in str(c)]
+        drop_calls = [c for c in mock_exec.call_args_list if "drop" in c.args]
         assert len(drop_calls) == 1
-        assert "stash@{1}" in drop_calls[0].args[0]
+        assert "stash@{1}" in drop_calls[0].args
 
     @pytest.mark.asyncio
     async def test_drop_empty_stash_ref_treated_as_missing(self):
@@ -494,7 +495,7 @@ class TestCleanupOldStashes:
         ):
             await GitSnapshot.cleanupOldStashes(bridge, "/tmp/workspace")
             mock_exec.assert_awaited_once()
-            assert "stash@{0}" in mock_exec.call_args.args[0]
+            assert "stash@{0}" in mock_exec.call_args.args
 
     @pytest.mark.asyncio
     async def test_keeps_active_session_stash(self):
@@ -576,10 +577,10 @@ class TestCleanupOldStashes:
             await GitSnapshot.cleanupOldStashes(bridge, "/tmp/workspace")
 
         assert mock_static.await_count == 2
-        first_drop = mock_static.call_args_list[0].args[0]
-        second_drop = mock_static.call_args_list[1].args[0]
-        assert "stash@{1}" in first_drop
-        assert "stash@{0}" in second_drop
+        first_drop_args = mock_static.call_args_list[0].args
+        second_drop_args = mock_static.call_args_list[1].args
+        assert "stash@{1}" in first_drop_args
+        assert "stash@{0}" in second_drop_args
 
     @pytest.mark.asyncio
     async def test_skips_malformed_cc_snapshot(self):
@@ -633,7 +634,7 @@ class TestCleanupOldStashes:
             await GitSnapshot.cleanupOldStashes(bridge, "/tmp/workspace")
 
         mock_exec.assert_awaited_once()
-        assert "stash@{0}" in mock_exec.call_args.args[0]
+        assert "stash@{0}" in mock_exec.call_args.args
 
     @pytest.mark.asyncio
     async def test_mixed_stashes_only_drops_eligible(self):
@@ -663,7 +664,7 @@ class TestCleanupOldStashes:
         # - stash@{2} belongs to active session
         # - stash@{3} is not a CC-snapshot
         assert mock_exec.await_count == 1
-        assert "stash@{0}" in mock_exec.call_args.args[0]
+        assert "stash@{0}" in mock_exec.call_args.args
 
     @pytest.mark.asyncio
     async def test_whitespace_only_lines_ignored(self):
@@ -686,7 +687,7 @@ class TestCleanupOldStashes:
             await GitSnapshot.cleanupOldStashes(bridge, "/tmp/workspace")
 
         mock_exec.assert_awaited_once()
-        assert "stash@{0}" in mock_exec.call_args.args[0]
+        assert "stash@{0}" in mock_exec.call_args.args
 
     @pytest.mark.asyncio
     async def test_custom_cleanup_days(self):
@@ -731,8 +732,8 @@ class TestGitExecHelpers:
         mock_proc.returncode = 0
         mock_proc.wait = AsyncMock(return_value=0)
 
-        with patch("asyncio.create_subprocess_shell", new_callable=AsyncMock, return_value=mock_proc):
-            await snapshot._git_exec("git status", "/tmp/workspace")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
+            await snapshot._git_exec("git", "status", cwd="/tmp/workspace")
 
     @pytest.mark.asyncio
     async def test_git_exec_failure_raises(self):
@@ -743,9 +744,9 @@ class TestGitExecHelpers:
         mock_proc.returncode = 1
         mock_proc.wait = AsyncMock(return_value=1)
 
-        with patch("asyncio.create_subprocess_shell", new_callable=AsyncMock, return_value=mock_proc):
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
             with pytest.raises(RuntimeError, match="git command failed"):
-                await snapshot._git_exec("git bad-cmd", "/tmp/workspace")
+                await snapshot._git_exec("git", "bad-cmd", cwd="/tmp/workspace")
 
     @pytest.mark.asyncio
     async def test_git_exec_output_returns_stdout(self):
@@ -755,8 +756,8 @@ class TestGitExecHelpers:
         mock_proc = MagicMock()
         mock_proc.communicate = AsyncMock(return_value=(b"stash@{0}: On main: test\n", b""))
 
-        with patch("asyncio.create_subprocess_shell", new_callable=AsyncMock, return_value=mock_proc):
-            result = await snapshot._git_exec_output("git stash list", "/tmp/workspace")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
+            result = await snapshot._git_exec_output("git", "stash", "list", cwd="/tmp/workspace")
             assert "stash@{0}" in result
 
     @pytest.mark.asyncio
@@ -765,8 +766,8 @@ class TestGitExecHelpers:
         mock_proc.returncode = 0
         mock_proc.wait = AsyncMock(return_value=0)
 
-        with patch("asyncio.create_subprocess_shell", new_callable=AsyncMock, return_value=mock_proc):
-            await GitSnapshot._git_exec_static("git status", "/tmp/workspace")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
+            await GitSnapshot._git_exec_static("git", "status", cwd="/tmp/workspace")
 
     @pytest.mark.asyncio
     async def test_git_exec_static_failure_raises(self):
@@ -775,15 +776,15 @@ class TestGitExecHelpers:
         mock_proc.returncode = 1
         mock_proc.wait = AsyncMock(return_value=1)
 
-        with patch("asyncio.create_subprocess_shell", new_callable=AsyncMock, return_value=mock_proc):
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
             with pytest.raises(RuntimeError, match="git command failed"):
-                await GitSnapshot._git_exec_static("git bad-cmd", "/tmp/workspace")
+                await GitSnapshot._git_exec_static("git", "bad-cmd", cwd="/tmp/workspace")
 
     @pytest.mark.asyncio
     async def test_git_exec_output_static_returns_stdout(self):
         mock_proc = MagicMock()
         mock_proc.communicate = AsyncMock(return_value=(b"output text", b""))
 
-        with patch("asyncio.create_subprocess_shell", new_callable=AsyncMock, return_value=mock_proc):
-            result = await GitSnapshot._git_exec_output_static("git stash list", "/tmp/workspace")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
+            result = await GitSnapshot._git_exec_output_static("git", "stash", "list", cwd="/tmp/workspace")
             assert result == "output text"

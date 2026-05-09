@@ -17,9 +17,14 @@ if command -v jq &>/dev/null; then
     --arg ti "$TOOL_INPUT" --arg cwd "$CWD" --arg ts "$TIMESTAMP" \
     '{sessionId:$sid, toolName:$tn, toolInput:$ti, cwd:$cwd, timestamp:$ts}')
 else
-  # Fallback: basic JSON with minimal escaping
-  ESCAPED_INPUT=$(echo "$TOOL_INPUT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
-  BODY="{\"sessionId\":\"${SESSION_ID}\",\"toolName\":\"${TOOL_NAME}\",\"toolInput\":\"${ESCAPED_INPUT}\",\"cwd\":\"${CWD}\",\"timestamp\":\"${TIMESTAMP}\"}"
+  # Fallback: manual JSON construction with comprehensive escaping
+  _esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' -e 's/\n/\\n/g' -e 's/\f/\\f/g' -e 's/\b/\\b/g' -e 's/\$/\\$/g' -e 's/`/\\`/g'; }
+  E_SID=$(_esc "$SESSION_ID")
+  E_TN=$(_esc "$TOOL_NAME")
+  E_TI=$(_esc "$TOOL_INPUT")
+  E_CWD=$(_esc "$CWD")
+  E_TS=$(_esc "$TIMESTAMP")
+  BODY="{\"sessionId\":\"${E_SID}\",\"toolName\":\"${E_TN}\",\"toolInput\":\"${E_TI}\",\"cwd\":\"${E_CWD}\",\"timestamp\":\"${E_TS}\"}"
 fi
 
 RESPONSE=$(curl -s -f -X POST "${BRIDGE_URL}/api/approval/request" \

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from core.claude_bridge import ClaudeBridge
+from core.utils import iso_timestamp
 
 
 # ---------------------------------------------------------------------------
@@ -46,8 +47,8 @@ def _seed_session(bridge, session_id, sender_id, workspace="/ws", active=True, r
         "cwd": workspace,
         "sessionId": session_id,
         "active": active,
-        "startedAt": datetime.now(timezone.utc).isoformat(),
-        "lastActiveAt": datetime.now(timezone.utc).isoformat(),
+        "startedAt": iso_timestamp(),
+        "lastActiveAt": iso_timestamp(),
         "messageCount": 0,
         "processAlive": True,
         "stashRef": None,
@@ -463,11 +464,18 @@ class TestUpdateActivity:
         _seed_session(bridge, "cc-100-abc", "user1")
         old_time = bridge.session_meta["cc-100-abc"]["lastActiveAt"]
 
-        # Small sleep to ensure timestamp differs
-        import time as _time
-        _time.sleep(0.01)
+        # iso_timestamp() is second-precision, so mock it to return a different value
+        from core.utils import iso_timestamp as _orig
+        from unittest.mock import patch
 
-        bridge.updateActivity("cc-100-abc")
+        call_count = 0
+        def _mock_iso_timestamp():
+            nonlocal call_count
+            call_count += 1
+            return f"2026-01-01T00:00:{call_count:02d}.000Z"
+
+        with patch("core.claude_bridge.iso_timestamp", side_effect=_mock_iso_timestamp):
+            bridge.updateActivity("cc-100-abc")
 
         new_time = bridge.session_meta["cc-100-abc"]["lastActiveAt"]
         assert new_time != old_time
@@ -499,7 +507,8 @@ class TestUpdateActivity:
 
 
 class TestHeartbeat:
-    def test_start_heartbeat_creates_task(self):
+    @pytest.mark.asyncio
+    async def test_start_heartbeat_creates_task(self):
         bridge = ClaudeBridge()
         assert bridge._heartbeat_task is None
         bridge.startHeartbeat()
@@ -507,7 +516,8 @@ class TestHeartbeat:
         # Cleanup
         bridge.stopHeartbeat()
 
-    def test_start_heartbeat_idempotent(self):
+    @pytest.mark.asyncio
+    async def test_start_heartbeat_idempotent(self):
         bridge = ClaudeBridge()
         bridge.startHeartbeat()
         first_task = bridge._heartbeat_task

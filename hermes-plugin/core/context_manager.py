@@ -9,12 +9,15 @@ See: cc-bridge-v3-final-plan.md Section 6
 """
 
 import asyncio
+import logging
 import os
 import pathlib
 import re
 from typing import Any
 
 from .utils import atomic_write_sync
+
+logger = logging.getLogger(__name__)
 
 RULES_START = "<!-- CC-BRIDGE-RULES:START -->"
 RULES_END = "<!-- CC-BRIDGE-RULES:END -->"
@@ -100,8 +103,8 @@ class ContextManager:
         parts: list[str] = []
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "git branch --show-current",
+            proc = await asyncio.create_subprocess_exec(
+                "git", "branch", "--show-current",
                 cwd=workspace,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -111,11 +114,11 @@ class ContextManager:
             if branch:
                 parts.append(f"当前分支: {branch}")
         except Exception:
-            pass
+            logger.warning("git branch query failed", exc_info=True)
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                "git diff --name-only HEAD~5",
+            proc = await asyncio.create_subprocess_exec(
+                "git", "diff", "--name-only", "HEAD~5",
                 cwd=workspace,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -126,13 +129,13 @@ class ContextManager:
                 lines = files.split("\n")[:20]
                 parts.append(f"最近修改的文件:\n" + "\n".join(lines))
         except Exception:
-            pass
+            logger.warning("git diff query failed", exc_info=True)
 
         # Cross-platform directory listing without shell injection risk
         try:
             entries = os.listdir(workspace)
             parts.append(f"工作目录内容:\n" + "\n".join(entries))
         except Exception:
-            pass
+            logger.warning("directory listing failed", exc_info=True)
 
         return "\n\n".join(parts)

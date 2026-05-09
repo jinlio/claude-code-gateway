@@ -1,7 +1,7 @@
 // GitSnapshot — stash-based snapshot with message positioning and session state validation
 // See: cc-bridge-v3-final-plan.md Section 5
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 // Regex for sessionId format: cc-<timestamp>-<random>
 const SESSION_ID_REGEX = /CC-snapshot-(cc-\d+-[a-z0-9]+)-(\d+)/;
@@ -22,8 +22,8 @@ class GitSnapshot {
     const safeRef = stashRef.replace(/[^a-zA-Z0-9_.-]/g, '_');
 
     try {
-      execSync('git add -A', { cwd: meta.cwd, stdio: 'ignore' });
-      execSync(`git stash push -u -m "${safeRef}"`, { cwd: meta.cwd, stdio: 'ignore' });
+      execFileSync('git', ['add', '-A'], { cwd: meta.cwd, stdio: 'ignore' });
+      execFileSync('git', ['stash', 'push', '-u', '-m', safeRef], { cwd: meta.cwd, stdio: 'ignore' });
       meta.stashRef = safeRef;
       return true;
     } catch (e) {
@@ -38,7 +38,7 @@ class GitSnapshot {
     }
 
     try {
-      const stashList = execSync('git stash list', { cwd: meta.cwd }).toString();
+      const stashList = execFileSync('git', ['stash', 'list'], { cwd: meta.cwd }).toString();
       const idx = stashList.split('\n').findIndex(line =>
         line.includes(meta.stashRef)
       );
@@ -48,10 +48,10 @@ class GitSnapshot {
       }
 
       // Discard current working tree changes before applying stash
-      try { execSync('git checkout -- .', { cwd: meta.cwd, stdio: 'ignore' }); } catch {}
-      try { execSync('git clean -fd', { cwd: meta.cwd, stdio: 'ignore' }); } catch {}
+      try { execFileSync('git', ['checkout', '--', '.'], { cwd: meta.cwd, stdio: 'ignore' }); } catch {}
+      try { execFileSync('git', ['clean', '-fd'], { cwd: meta.cwd, stdio: 'ignore' }); } catch {}
 
-      execSync(`git stash apply stash@{${idx}}`, { cwd: meta.cwd });
+      execFileSync('git', ['stash', 'apply', `stash@{${idx}}`], { cwd: meta.cwd });
 
       // Clear stashRef to prevent duplicate revert
       meta.stashRef = null;
@@ -68,7 +68,7 @@ class GitSnapshot {
     }
 
     try {
-      const stashList = execSync('git stash list', { cwd: meta.cwd }).toString();
+      const stashList = execFileSync('git', ['stash', 'list'], { cwd: meta.cwd }).toString();
       const entries = stashList.split('\n');
       const idx = entries.findIndex(line => line.includes(meta.stashRef));
 
@@ -77,7 +77,7 @@ class GitSnapshot {
         return { success: false, message: 'Snapshot manually deleted or missing' };
       }
 
-      execSync(`git stash drop stash@{${idx}}`, { cwd: meta.cwd });
+      execFileSync('git', ['stash', 'drop', `stash@{${idx}}`], { cwd: meta.cwd });
       meta.stashRef = null;
       return { success: true, message: 'Snapshot dropped' };
     } catch (err) {
@@ -87,7 +87,7 @@ class GitSnapshot {
 
   static cleanupOldStashes(bridge, cwd, cleanupDays = 7) {
     try {
-      const stashList = execSync('git stash list', { cwd }).toString();
+      const stashList = execFileSync('git', ['stash', 'list'], { cwd }).toString();
       const cutoff = Date.now() - cleanupDays * 24 * 3600000;
       const entries = stashList.split('\n').filter(Boolean);
 
@@ -115,7 +115,7 @@ class GitSnapshot {
       // Drop in reverse order to preserve indices
       for (let i = toDrop.length - 1; i >= 0; i--) {
         try {
-          execSync(`git stash drop stash@{${toDrop[i]}}`, { cwd });
+          execFileSync('git', ['stash', 'drop', `stash@{${toDrop[i]}}`], { cwd, stdio: 'ignore' });
         } catch {}
       }
     } catch {}
